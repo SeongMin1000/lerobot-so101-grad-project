@@ -176,3 +176,18 @@ outputs/
 *.urdf
 *.xml
 *.part
+
+# Local graduation-project artifacts
+/debug/
+/hybrid_debug*/
+/runtime/opencv_debug/
+/assets/opencv/calibration/
+/code_backups/
+/config_backups/
+/camera_backups/
+/detector_tracks/
+*.bak_before_*
+*.pre_*
+/hybrid_runtime.before_*.json
+*.bak
+*.bak_*
