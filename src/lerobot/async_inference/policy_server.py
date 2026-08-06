@@ -87,6 +87,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.policy = None
         self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
+        self._logged_policy_input_stats = False
 
     @property
     def running(self):
@@ -145,6 +146,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.policy_type = policy_specs.policy_type  # act, pi0, etc.
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
+        self._logged_policy_input_stats = False
 
         policy_class = get_policy_class(self.policy_type)
 
@@ -154,15 +156,23 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         # Load preprocessor and postprocessor, overriding device to match requested device
         device_override = {"device": self.device}
+        preprocessor_overrides = {"device_processor": device_override}
+        # An empty runtime map means "use the mapping saved with the checkpoint".
+        # Overriding it with {} would silently remove a training-time rename map.
+        if policy_specs.rename_map:
+            preprocessor_overrides["rename_observations_processor"] = {"rename_map": policy_specs.rename_map}
         self.preprocessor, self.postprocessor = make_pre_post_processors(
             self.policy.config,
             pretrained_path=policy_specs.pretrained_name_or_path,
-            preprocessor_overrides={
-                "device_processor": device_override,
-                "rename_observations_processor": {"rename_map": policy_specs.rename_map},
-            },
+            preprocessor_overrides=preprocessor_overrides,
             postprocessor_overrides={"device_processor": device_override},
         )
+
+        effective_rename_map = next(
+            (step.rename_map for step in self.preprocessor.steps if hasattr(step, "rename_map")),
+            {},
+        )
+        self.logger.info(f"Policy preprocessor rename_map: {effective_rename_map}")
 
         end = time.perf_counter()
 
@@ -343,6 +353,10 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             observation_t.get_observation(),
             self.lerobot_features,
             self.policy_image_features,
+            # SmolVLA's model code preserves aspect ratio and pads images itself.
+            # Resizing 640x480 camera frames to the configured 256x256 feature
+            # shape here would squash their geometry before they reach the VLA.
+            resize_images=self.policy_type != "smolvla",
         )
         prepare_time = time.perf_counter() - start_prepare
 
@@ -351,6 +365,15 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         observation = self.preprocessor(observation)
         self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
+
+        if not self._logged_policy_input_stats:
+            for key, value in observation.items():
+                if isinstance(value, torch.Tensor) and "image" in key:
+                    self.logger.info(
+                        f"Policy input {key}: shape={tuple(value.shape)}, dtype={value.dtype}, "
+                        f"min={value.amin().item():.6f}, max={value.amax().item():.6f}"
+                    )
+            self._logged_policy_input_stats = True
 
         """3. Get action chunk"""
         start_inference = time.perf_counter()

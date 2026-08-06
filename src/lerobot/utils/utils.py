@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import platform
 import select
@@ -91,7 +92,9 @@ def init_logging(
         logger.setLevel(logging.ERROR)
 
     if log_file is not None:
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=5 * 1024 * 1024, backupCount=2
+        )
         file_handler.setFormatter(formatter)
         file_handler.setLevel(file_level.upper())
         logger.addHandler(file_handler)

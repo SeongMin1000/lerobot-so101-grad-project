@@ -147,6 +147,14 @@ class RobotClientConfig:
     debug_visualize_queue_size: bool = field(
         default=False, metadata={"help": "Visualize the action queue size"}
     )
+    debug_observation_dir: str | None = field(
+        default=None,
+        metadata={"help": "Directory for client-side outgoing camera image captures"},
+    )
+    debug_observation_limit: int = field(
+        default=1,
+        metadata={"help": "Number of outgoing observations to capture"},
+    )
 
     @property
     def environment_dt(self) -> float:
@@ -179,6 +187,11 @@ class RobotClientConfig:
         if self.actions_per_chunk <= 0:
             raise ValueError(f"actions_per_chunk must be positive, got {self.actions_per_chunk}")
 
+        if self.debug_observation_limit <= 0:
+            raise ValueError(
+                f"debug_observation_limit must be positive, got {self.debug_observation_limit}"
+            )
+
         self.aggregate_fn = get_aggregate_function(self.aggregate_fn_name)
 
     @classmethod
@@ -199,5 +212,7 @@ class RobotClientConfig:
             "actions_per_chunk": self.actions_per_chunk,
             "task": self.task,
             "debug_visualize_queue_size": self.debug_visualize_queue_size,
+            "debug_observation_dir": self.debug_observation_dir,
+            "debug_observation_limit": self.debug_observation_limit,
             "aggregate_fn_name": self.aggregate_fn_name,
         }

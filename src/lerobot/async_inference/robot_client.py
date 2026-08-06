@@ -33,12 +33,14 @@ python src/lerobot/async_inference/robot_client.py \
 ```
 """
 
+import json
 import logging
 import pickle  # nosec
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from queue import Queue
 from typing import Any
@@ -46,6 +48,7 @@ from typing import Any
 import draccus
 import grpc
 import torch
+from PIL import Image
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
@@ -125,6 +128,7 @@ class RobotClient:
         self.action_queue = Queue()
         self.action_queue_lock = threading.Lock()  # Protect queue operations
         self.action_queue_size = []
+        self._debug_observations_saved = 0
         self.start_barrier = threading.Barrier(2)  # 2 threads: action receiver, control loop
 
         # FPS measurement
@@ -405,6 +409,40 @@ class RobotClient:
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self._chunk_size_threshold
 
+    def _save_debug_observation_images(self, raw_observation: RawObservation) -> None:
+        """Save the exact camera arrays about to be serialized and sent to the server."""
+        if (
+            self.config.debug_observation_dir is None
+            or self._debug_observations_saved >= self.config.debug_observation_limit
+        ):
+            return
+
+        capture_dir = Path(self.config.debug_observation_dir).expanduser() / (
+            f"capture_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}"
+        )
+        capture_dir.mkdir(parents=True, exist_ok=False)
+
+        metadata: dict[str, dict[str, Any]] = {}
+        for camera_name in self.robot.cameras:
+            image = raw_observation.get(camera_name)
+            if image is None:
+                self.logger.warning(f"Camera {camera_name} is missing from the outgoing observation")
+                continue
+
+            metadata[camera_name] = {
+                "shape": list(image.shape),
+                "dtype": str(image.dtype),
+                "min": int(image.min()),
+                "max": int(image.max()),
+            }
+            Image.fromarray(image).save(capture_dir / f"{camera_name}.png")
+
+        with (capture_dir / "metadata.json").open("w", encoding="utf-8") as metadata_file:
+            json.dump(metadata, metadata_file, indent=2, ensure_ascii=False)
+
+        self._debug_observations_saved += 1
+        self.logger.info(f"Saved outgoing camera images to {capture_dir}")
+
     def control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
         try:
             # Get serialized observation bytes from the function
@@ -412,6 +450,7 @@ class RobotClient:
 
             raw_observation: RawObservation = self.robot.get_observation()
             raw_observation["task"] = task
+            self._save_debug_observation_images(raw_observation)
 
             with self.latest_action_lock:
                 latest_action = self.latest_action
