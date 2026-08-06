@@ -35,6 +35,12 @@ class SOFollowerConfig:
     # names to the max_relative_target value for that motor.
     max_relative_target: float | dict[str, float] | None = None
 
+    # Stop all joints when the measured position remains too far behind the
+    # previously commanded target. This is only used together with
+    # `max_relative_target` and protects coordinated motion when one motor stalls.
+    max_tracking_error: float | None = None
+    tracking_error_grace_steps: int = 2
+
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 

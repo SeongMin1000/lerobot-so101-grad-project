@@ -23,6 +23,7 @@ from lerobot.robots.so_follower import (
     SO100Follower,
     SO100FollowerConfig,
 )
+from lerobot.robots.utils import ensure_synchronized_goal_position
 
 
 def _make_bus_mock() -> MagicMock:
@@ -109,3 +110,45 @@ def test_send_action(follower):
 
     goal_pos = {m: (i + 1) * 10 for i, m in enumerate(follower.bus.motors)}
     follower.bus.sync_write.assert_called_once_with("Goal_Position", goal_pos)
+
+
+def test_synchronized_goal_position_preserves_joint_ratio():
+    goal_reference_pos = {
+        "shoulder_lift": (50.0, 0.0),
+        "elbow_flex": (-40.0, 0.0),
+    }
+
+    safe_goal = ensure_synchronized_goal_position(goal_reference_pos, 2.0)
+
+    assert safe_goal["shoulder_lift"] == pytest.approx(2.0)
+    assert safe_goal["elbow_flex"] == pytest.approx(-1.6)
+
+
+def test_send_action_stops_all_joints_when_one_motor_stalls(follower):
+    follower.config.max_relative_target = 2.0
+    follower.config.max_tracking_error = 3.0
+    follower.config.tracking_error_grace_steps = 1
+    follower.connect()
+
+    motors = list(follower.bus.motors)
+    present_0 = dict.fromkeys(motors, 0.0)
+    present_1 = {**present_0, "elbow_flex": -1.6}
+    present_2 = {**present_0, "elbow_flex": -3.2}
+    follower.bus.sync_read.side_effect = [present_0, present_1, present_2]
+
+    action = {f"{motor}.pos": 0.0 for motor in motors}
+    action["shoulder_lift.pos"] = 50.0
+    action["elbow_flex.pos"] = -40.0
+
+    first_sent = follower.send_action(action)
+    second_sent = follower.send_action(action)
+
+    assert first_sent["shoulder_lift.pos"] == pytest.approx(2.0)
+    assert first_sent["elbow_flex.pos"] == pytest.approx(-1.6)
+    assert second_sent["shoulder_lift.pos"] == pytest.approx(4.0)
+    assert second_sent["elbow_flex.pos"] == pytest.approx(-3.2)
+
+    with pytest.raises(RuntimeError, match="Motor tracking error exceeded"):
+        follower.send_action(action)
+
+    follower.bus.sync_write.assert_called_with("Goal_Position", present_2)

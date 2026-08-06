@@ -107,7 +107,7 @@ class SOLeader(Teleoperator):
             "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
         )
         range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        range_mins[full_turn_motor] = 0
+        range_mins[full_turn_motor] = 110
         range_maxes[full_turn_motor] = 4095
 
         self.calibration = {}

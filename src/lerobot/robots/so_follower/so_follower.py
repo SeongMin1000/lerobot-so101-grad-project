@@ -28,7 +28,7 @@ from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
-from ..utils import ensure_safe_goal_position
+from ..utils import ensure_synchronized_goal_position
 from .config_so_follower import SOFollowerRobotConfig
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,13 @@ class SOFollower(Robot):
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+        self._last_goal_pos: dict[str, float] | None = None
+        self._tracking_error_counts: dict[str, int] = {}
+
+        if self.config.max_tracking_error is not None and self.config.max_tracking_error < 0:
+            raise ValueError("max_tracking_error must be non-negative.")
+        if self.config.tracking_error_grace_steps < 1:
+            raise ValueError("tracking_error_grace_steps must be at least 1.")
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -102,7 +109,53 @@ class SOFollower(Robot):
             cam.connect()
 
         self.configure()
+        self._reset_action_safety_state()
         logger.info(f"{self} connected.")
+
+    def _reset_action_safety_state(self) -> None:
+        self._last_goal_pos = None
+        self._tracking_error_counts = {}
+
+    def _stop_on_tracking_error(
+        self,
+        present_pos: dict[str, float],
+        commanded_motors: set[str],
+    ) -> None:
+        """Hold every commanded joint and abort when one motor persistently stalls."""
+
+        if self._last_goal_pos is None or self.config.max_tracking_error is None:
+            return
+
+        threshold = self.config.max_tracking_error
+        violations: dict[str, dict[str, float | int]] = {}
+        for motor in commanded_motors:
+            tracking_error = abs(self._last_goal_pos[motor] - present_pos[motor])
+            if tracking_error > threshold:
+                count = self._tracking_error_counts.get(motor, 0) + 1
+                self._tracking_error_counts[motor] = count
+                if count >= self.config.tracking_error_grace_steps:
+                    violations[motor] = {
+                        "last goal_pos": self._last_goal_pos[motor],
+                        "present_pos": present_pos[motor],
+                        "tracking_error": tracking_error,
+                        "consecutive_steps": count,
+                    }
+            else:
+                self._tracking_error_counts[motor] = 0
+
+        if not violations:
+            return
+
+        hold_pos = {motor: present_pos[motor] for motor in commanded_motors}
+        self.bus.sync_write("Goal_Position", hold_pos)
+        self._last_goal_pos = hold_pos
+        self._tracking_error_counts = {}
+        message = (
+            "Motor tracking error exceeded the safety limit; all commanded joints were held and "
+            f"inference must stop. Details: {violations}"
+        )
+        logger.error(message)
+        raise RuntimeError(message)
 
     @property
     def is_calibrated(self) -> bool:
@@ -135,8 +188,8 @@ class SOFollower(Robot):
             "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
         )
         range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        range_mins[full_turn_motor] = 0
-        range_maxes[full_turn_motor] = 4095
+        range_mins[full_turn_motor] = 1350
+        range_maxes[full_turn_motor] = 3110
 
         self.calibration = {}
         for motor, m in self.bus.motors.items():
@@ -209,12 +262,29 @@ class SOFollower(Robot):
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
-        # Cap goal position when too far away from present position.
-        # /!\ Slower fps expected due to reading from the follower.
+        # Rate-limit the complete goal vector from the previous command, rather
+        # than clipping each joint independently from its measured position.
+        # A tracking watchdog stops every joint if one motor cannot keep up.
         if self.config.max_relative_target is not None:
             present_pos = self.bus.sync_read("Present_Position")
-            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+            commanded_motors = set(goal_pos)
+
+            if self._last_goal_pos is None or set(self._last_goal_pos) != commanded_motors:
+                self._last_goal_pos = {motor: present_pos[motor] for motor in commanded_motors}
+                self._tracking_error_counts = dict.fromkeys(commanded_motors, 0)
+            else:
+                self._stop_on_tracking_error(present_pos, commanded_motors)
+
+            goal_reference_pos = {
+                motor: (desired_pos, self._last_goal_pos[motor])
+                for motor, desired_pos in goal_pos.items()
+            }
+            goal_pos = ensure_synchronized_goal_position(
+                goal_reference_pos, self.config.max_relative_target
+            )
+            self._last_goal_pos = goal_pos.copy()
+        else:
+            self._reset_action_safety_state()
 
         # Send goal position to the arm
         self.bus.sync_write("Goal_Position", goal_pos)
@@ -222,6 +292,7 @@ class SOFollower(Robot):
 
     @check_if_not_connected
     def disconnect(self):
+        self._reset_action_safety_state()
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
             cam.disconnect()
