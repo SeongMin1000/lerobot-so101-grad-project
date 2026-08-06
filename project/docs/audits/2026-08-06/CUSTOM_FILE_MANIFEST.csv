@@ -1,0 +1,57 @@
+category,git_state,path,role,evidence,recommended_action
+tracked_modified,modified,.gitignore,프로젝트 생성물 ignore 규칙,A,생성물 경로 재편 후 규칙 갱신
+tracked_modified,modified,src/lerobot/async_inference/configs.py,observation debug 설정,A,유지 후 공통 config로 문서화
+tracked_modified,modified,src/lerobot/async_inference/helpers.py,SmolVLA 영상 shape/normalization 처리,A,별도 핵심 commit
+tracked_modified,modified,src/lerobot/async_inference/policy_server.py,SmolVLA resize 분기와 입력 진단,A,LoRA load smoke test 추가
+tracked_modified,modified,src/lerobot/async_inference/robot_client.py,서버 전송 직전 카메라 캡처,A,진단 옵션으로 유지
+tracked_modified,modified,src/lerobot/robots/so_follower/config_so_follower.py,tracking watchdog 설정,A,안전 commit
+tracked_modified,modified,src/lerobot/robots/so_follower/so_follower.py,캘리브레이션·동기화 제한·watchdog,A,안전 commit 및 실제 장비 검증
+tracked_modified,modified,src/lerobot/robots/utils.py,공통 목표 변화량 축척 함수,A,안전 commit
+tracked_modified,modified,src/lerobot/teleoperators/so_leader/so_leader.py,leader wrist-roll 캘리브레이션,A,장비별 근거 문서화
+tracked_modified,modified,src/lerobot/utils/utils.py,회전 로그,A,유지
+tracked_modified,modified,tests/async_inference/test_helpers.py,영상 입력 회귀 테스트,A,유지
+tracked_modified,modified,tests/robots/test_so100_follower.py,로봇 안전 회귀 테스트,A,유지·확장
+active_custom_code,untracked,merge_grasp_v2_datasets.py,grasp-v2 데이터셋 병합,A,문법 오류 우선 수정 후 tools로 이동
+active_custom_code,untracked,scripts/grad_project.sh,졸업과제 통합 메뉴,A,project/scripts/tools로 이동
+active_custom_code,untracked,scripts/run_smolvla_red_observe_inference.sh,로봇 PC SmolVLA 실행,A,project/scripts/robot로 이동·profile화
+active_custom_code,untracked,scripts/run_smolvla_red_policy_server.sh,GPU 정책 서버 실행,A,project/scripts/gpu로 이동
+legacy_custom_code,untracked,src/lerobot/async_inference/hybrid_cv_act_client.py,OpenCV+ACT FSM,A,archive/legacy_act로 격리
+legacy_custom_code,untracked,src/lerobot/async_inference/hybrid_cv_diffusion_client.py,OpenCV+Diffusion FSM,A,archive/legacy_diffusion로 격리
+active_custom_code,untracked,src/lerobot/async_inference/hybrid_detect_once.py,단일 프레임 검출,A,lerobot.grad_project.perception로 이동
+active_custom_code,untracked,src/lerobot/async_inference/hybrid_goto_both_pose.py,leader/follower 동시 포즈 이동,A,lerobot.grad_project.control로 이동
+active_custom_code,untracked,src/lerobot/async_inference/hybrid_paths.py,프로젝트 경로 resolver,A,유일한 경로 기준으로 승격
+active_custom_code,untracked,src/lerobot/async_inference/hybrid_record_color_sequence.py,색 순서 데이터 기록,A,기본 순서 수정 후 recording으로 이동
+active_custom_code,untracked,src/lerobot/async_inference/hybrid_record_grasp_zone.py,영역별 grasp 기록,A,recording으로 이동
+active_custom_code,untracked,src/lerobot/async_inference/hybrid_save_pose.py,런타임 포즈 저장,A,백업 계약 수정 후 tools로 이동
+active_custom_code,untracked,src/lerobot/async_inference/opencv_block_detector.py,블록 검출 v4,A,perception으로 이동
+active_custom_code,untracked,src/lerobot/async_inference/opencv_calibrate.py,detector 보정,A,perception/tools로 이동
+orphan_custom_code,untracked,src/lerobot/async_inference/opencv_target_verifier.py,고정 슬롯 배치 검증,A,FSM 연결 여부 결정 후 perception으로 이동
+active_custom_code,untracked,src/lerobot/async_inference/safe_config_io.py,원자적 JSON 저장,A,백업 API 계약 정리
+active_custom_code,untracked,src/lerobot/async_inference/smolvla_record_observe_return.py,SmolVLA end-to-end 기록,A,recording으로 이동
+active_asset,untracked,assets/opencv/top_background.png,top detector 배경,A,project/assets/opencv로 이동
+active_config,untracked,configs/opencv_detector.json,detector 설정,A,project/config/detector.json으로 이동
+data_config,untracked,grasp_v2_splits.json,데이터셋 분할,A,project/config 또는 dataset metadata로 이동
+ambiguous_config,untracked,hybrid_runtime.json,현재 스크립트가 읽는 runtime,A,실제 로봇 검증 후 canonical 지정
+orphan_config,untracked,hybrid_runtime_smolvla.json,별도 SmolVLA runtime,A,canonical과 병합 또는 삭제
+config_backup,untracked,hybrid_runtime.before_clear_pregrasp.json,이전 runtime,A,var/backups로 이동 후 Git 이력화
+config_backup,untracked,hybrid_runtime.before_fix_gripper_open.json,이전 runtime,A,var/backups로 이동 후 Git 이력화
+config_backup,untracked,hybrid_runtime.before_observe_open.json,이전 runtime,A,후보 포즈 검증 후 var/backups로 이동
+config_backup,untracked,hybrid_runtime.before_wide_paper_20260714_205413.json,이전 runtime,A,후보 포즈 검증 후 var/backups로 이동
+verifier_asset,untracked,target_empty_reference.png,target verifier 빈 기준,A,project/assets/opencv로 이동
+verifier_config,untracked,target_verifier.json,target verifier 설정,A,미사용 키 정리·project/config로 이동
+source_backup,untracked,scripts/run_smolvla_red_observe_inference.sh.bak_before_synchronized_safety_20260804_153829,안전 수정 전 실행기,B,commit 후 var/backups 또는 제거
+source_backup,untracked,scripts/run_smolvla_red_observe_inference.sh.pre_smolvla_input_fix_20260802_185227,입력 수정 전 실행기,B,commit 후 var/backups 또는 제거
+source_backup,untracked,src/lerobot/async_inference/helpers.py.pre_aspect_fix,비율 보존 전 helper,B,Git 이력으로 대체
+duplicate_backup,untracked,src/lerobot/async_inference/helpers.py.pre_smolvla_input_fix_20260802_185227,위 helper 백업과 동일,B,Git 이력화 후 중복 제거
+source_backup,untracked,src/lerobot/async_inference/policy_server.py.pre_smolvla_input_fix_20260802_185227,입력 수정 전 서버,B,Git 이력으로 대체
+source_backup,untracked,src/lerobot/async_inference/opencv_target_verifier.py.bak_before_single_slot_fix,단일 슬롯 수정 전 verifier,B,Git 이력으로 대체
+source_backup,untracked,src/lerobot/async_inference/opencv_target_verifier.py.bak_before_slot_fix,슬롯 수정 전 verifier,B,Git 이력으로 대체
+source_backup,untracked,src/lerobot/robots/so_follower/config_so_follower.py.bak_before_synchronized_safety_20260804_153829,안전 config 전,B,Git 이력으로 대체
+source_backup,untracked,src/lerobot/robots/so_follower/so_follower.py.bak_before_synchronized_safety_20260804_153829,동기화 안전 전 follower,B,Git 이력으로 대체
+source_backup,untracked,src/lerobot/robots/utils.py.bak_before_synchronized_safety_20260804_153829,안전 helper 전,B,Git 이력으로 대체
+source_backup,untracked,tests/robots/test_so100_follower.py.bak_before_synchronized_safety_20260804_153829,안전 테스트 전,B,Git 이력으로 대체
+generated_group,untracked,debug/client_camera_inputs/**,96회 카메라 캡처 384파일,A,var/debug 또는 저장소 밖으로 이동
+generated_group,ignored,src/**/__pycache__/**,Python bytecode 등 363파일,A,삭제 가능 생성물
+generated_group,ignored,assets/opencv/calibration/**,calibration 이미지 25파일,A,var/calibration 또는 별도 실험 보관
+generated_group,ignored,logs/**,로그 10파일,A,var/logs로 이동
+generated_group,ignored,outputs/**,출력 이미지 2파일,A,var/outputs로 이동

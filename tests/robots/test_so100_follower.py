@@ -147,8 +147,12 @@ def test_send_action_stops_all_joints_when_one_motor_stalls(follower):
     assert first_sent["elbow_flex.pos"] == pytest.approx(-1.6)
     assert second_sent["shoulder_lift.pos"] == pytest.approx(4.0)
     assert second_sent["elbow_flex.pos"] == pytest.approx(-3.2)
+    assert follower.last_action_diagnostics["event"] == "command"
+    assert follower.last_action_diagnostics["tracking_error"]["shoulder_lift"] == pytest.approx(2.0)
 
     with pytest.raises(RuntimeError, match="Motor tracking error exceeded"):
         follower.send_action(action)
 
     follower.bus.sync_write.assert_called_with("Goal_Position", present_2)
+    assert follower.last_action_diagnostics["event"] == "tracking_abort"
+    assert follower.last_action_diagnostics["tracking_error"]["shoulder_lift"] == pytest.approx(4.0)

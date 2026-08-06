@@ -191,3 +191,6 @@ outputs/
 /hybrid_runtime.before_*.json
 *.bak
 *.bak_*
+
+# Graduation-project runtime artifacts
+/var/

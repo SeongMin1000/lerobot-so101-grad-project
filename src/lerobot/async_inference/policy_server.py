@@ -30,6 +30,7 @@ import threading
 import time
 from concurrent import futures
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from queue import Empty, Queue
 from typing import Any
@@ -49,6 +50,7 @@ from lerobot.types import PolicyAction
 
 from .configs import PolicyServerConfig
 from .constants import SUPPORTED_POLICIES
+from .debug_capture import save_image_mapping
 from .helpers import (
     FPSTracker,
     Observation,
@@ -88,6 +90,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
         self._logged_policy_input_stats = False
+        self._debug_capture_ids: set[str] = set()
 
     @property
     def running(self):
@@ -105,6 +108,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         with self._predicted_timesteps_lock:
             self._predicted_timesteps = set()
+
+        self.last_processed_obs = None
+        self._debug_capture_ids = set()
 
     def Ready(self, request, context):  # noqa: N802
         client_id = context.peer()
@@ -192,6 +198,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         )  # blocking call while looping over request_iterator
         timed_observation = pickle.loads(received_bytes)  # nosec
         deserialize_time = time.perf_counter() - start_deserialize
+
+        self._capture_debug_observation(timed_observation, timed_observation.get_observation(), "raw")
 
         self.logger.debug(f"Received observation #{timed_observation.get_timestep()}")
 
@@ -337,6 +345,28 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         return chunk[:, : self.actions_per_chunk, :]
 
+    def _capture_debug_observation(
+        self,
+        timed_observation: TimedObservation,
+        values: dict[str, Any],
+        stage: str,
+    ) -> None:
+        capture_root = self.config.debug_observation_dir
+        capture_id = timed_observation.get_debug_capture_id()
+        if capture_root is None or capture_id is None:
+            return
+
+        if stage == "raw":
+            if len(self._debug_capture_ids) >= self.config.debug_observation_limit:
+                return
+            self._debug_capture_ids.add(capture_id)
+        elif capture_id not in self._debug_capture_ids:
+            return
+
+        capture_dir = Path(capture_root).expanduser() / capture_id
+        output_dir = save_image_mapping(values, capture_dir, stage=stage)
+        self.logger.info(f"Saved {stage} camera diagnostic stage to {output_dir}")
+
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
         """Predict an action chunk based on an observation.
 
@@ -358,11 +388,13 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             # shape here would squash their geometry before they reach the VLA.
             resize_images=self.policy_type != "smolvla",
         )
+        self._capture_debug_observation(observation_t, observation, "helper")
         prepare_time = time.perf_counter() - start_prepare
 
         """2. Apply preprocessor"""
         start_preprocess = time.perf_counter()
         observation = self.preprocessor(observation)
+        self._capture_debug_observation(observation_t, observation, "policy")
         self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
 

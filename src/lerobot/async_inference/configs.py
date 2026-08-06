@@ -64,6 +64,15 @@ class PolicyServerConfig:
         default=DEFAULT_OBS_QUEUE_TIMEOUT, metadata={"help": "Timeout for observation queue in seconds"}
     )
 
+    debug_observation_dir: str | None = field(
+        default=None,
+        metadata={"help": "Directory for matched server-side raw/helper/policy image captures"},
+    )
+    debug_observation_limit: int = field(
+        default=1,
+        metadata={"help": "Number of matched observations to capture per client session"},
+    )
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         if self.port < 1 or self.port > 65535:
@@ -77,6 +86,11 @@ class PolicyServerConfig:
 
         if self.obs_queue_timeout < 0:
             raise ValueError(f"obs_queue_timeout must be non-negative, got {self.obs_queue_timeout}")
+
+        if self.debug_observation_limit <= 0:
+            raise ValueError(
+                f"debug_observation_limit must be positive, got {self.debug_observation_limit}"
+            )
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "PolicyServerConfig":
@@ -96,6 +110,8 @@ class PolicyServerConfig:
             "fps": self.fps,
             "environment_dt": self.environment_dt,
             "inference_latency": self.inference_latency,
+            "debug_observation_dir": self.debug_observation_dir,
+            "debug_observation_limit": self.debug_observation_limit,
         }
 
 
@@ -155,6 +171,14 @@ class RobotClientConfig:
         default=1,
         metadata={"help": "Number of outgoing observations to capture"},
     )
+    debug_motor_trace_dir: str | None = field(
+        default=None,
+        metadata={"help": "Directory for the bounded motor command/feedback flight recorder"},
+    )
+    debug_motor_trace_limit: int = field(
+        default=300,
+        metadata={"help": "Maximum number of recent motor trace entries retained in memory"},
+    )
 
     @property
     def environment_dt(self) -> float:
@@ -192,6 +216,11 @@ class RobotClientConfig:
                 f"debug_observation_limit must be positive, got {self.debug_observation_limit}"
             )
 
+        if self.debug_motor_trace_limit <= 0:
+            raise ValueError(
+                f"debug_motor_trace_limit must be positive, got {self.debug_motor_trace_limit}"
+            )
+
         self.aggregate_fn = get_aggregate_function(self.aggregate_fn_name)
 
     @classmethod
@@ -214,5 +243,7 @@ class RobotClientConfig:
             "debug_visualize_queue_size": self.debug_visualize_queue_size,
             "debug_observation_dir": self.debug_observation_dir,
             "debug_observation_limit": self.debug_observation_limit,
+            "debug_motor_trace_dir": self.debug_motor_trace_dir,
+            "debug_motor_trace_limit": self.debug_motor_trace_limit,
             "aggregate_fn_name": self.aggregate_fn_name,
         }

@@ -1,0 +1,40 @@
+{
+  "frame_color": "bgr",
+  "target_polygon": [
+    [
+      249,
+      192
+    ],
+    [
+      410,
+      190
+    ],
+    [
+      414,
+      269
+    ],
+    [
+      249,
+      272
+    ]
+  ],
+  "slot_labels": [
+    "blue",
+    "wood",
+    "green",
+    "yellow",
+    "red"
+  ],
+  "slot_inner_margin": 0.08,
+  "reference_image": "../assets/opencv/target_empty_reference.png",
+  "chroma_threshold": 16.0,
+  "luma_threshold": 34.0,
+  "luma_weight": 0.35,
+  "blur_kernel": 5,
+  "morph_kernel": 5,
+  "min_foreground_ratio": 0.055,
+  "min_largest_contour_area": 220.0,
+  "stable_frames": 6,
+  "slot_layout": "two_rows_3_2",
+  "min_component_slot_overlap": 0.2
+}

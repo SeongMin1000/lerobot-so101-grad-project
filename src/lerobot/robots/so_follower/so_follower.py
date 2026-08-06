@@ -63,6 +63,7 @@ class SOFollower(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         self._last_goal_pos: dict[str, float] | None = None
         self._tracking_error_counts: dict[str, int] = {}
+        self._last_action_diagnostics: dict[str, object] | None = None
 
         if self.config.max_tracking_error is not None and self.config.max_tracking_error < 0:
             raise ValueError("max_tracking_error must be non-negative.")
@@ -115,6 +116,12 @@ class SOFollower(Robot):
     def _reset_action_safety_state(self) -> None:
         self._last_goal_pos = None
         self._tracking_error_counts = {}
+        self._last_action_diagnostics = None
+
+    @property
+    def last_action_diagnostics(self) -> dict[str, object] | None:
+        """Last requested/sent/measured goal snapshot for the async flight recorder."""
+        return self._last_action_diagnostics
 
     def _stop_on_tracking_error(
         self,
@@ -261,6 +268,9 @@ class SOFollower(Robot):
         """
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        requested_goal_pos = goal_pos.copy()
+        present_pos: dict[str, float] | None = None
+        previous_goal_pos: dict[str, float] | None = None
 
         # Rate-limit the complete goal vector from the previous command, rather
         # than clipping each joint independently from its measured position.
@@ -273,7 +283,25 @@ class SOFollower(Robot):
                 self._last_goal_pos = {motor: present_pos[motor] for motor in commanded_motors}
                 self._tracking_error_counts = dict.fromkeys(commanded_motors, 0)
             else:
-                self._stop_on_tracking_error(present_pos, commanded_motors)
+                previous_goal_pos = self._last_goal_pos.copy()
+                try:
+                    self._stop_on_tracking_error(present_pos, commanded_motors)
+                except RuntimeError:
+                    self._last_action_diagnostics = {
+                        "event": "tracking_abort",
+                        "requested_goal_pos": requested_goal_pos,
+                        "sent_goal_pos": self._last_goal_pos.copy(),
+                        "previous_goal_pos": previous_goal_pos,
+                        "present_pos": present_pos.copy(),
+                        "tracking_error": {
+                            motor: abs(previous_goal_pos[motor] - present_pos[motor])
+                            for motor in commanded_motors
+                        },
+                    }
+                    raise
+
+            if previous_goal_pos is None:
+                previous_goal_pos = self._last_goal_pos.copy()
 
             goal_reference_pos = {
                 motor: (desired_pos, self._last_goal_pos[motor])
@@ -288,6 +316,21 @@ class SOFollower(Robot):
 
         # Send goal position to the arm
         self.bus.sync_write("Goal_Position", goal_pos)
+        self._last_action_diagnostics = {
+            "event": "command",
+            "requested_goal_pos": requested_goal_pos,
+            "sent_goal_pos": goal_pos.copy(),
+            "previous_goal_pos": previous_goal_pos,
+            "present_pos": None if present_pos is None else present_pos.copy(),
+            "tracking_error": (
+                {}
+                if present_pos is None or previous_goal_pos is None
+                else {
+                    motor: abs(previous_goal_pos[motor] - present_pos[motor])
+                    for motor in goal_pos
+                }
+            ),
+        }
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     @check_if_not_connected

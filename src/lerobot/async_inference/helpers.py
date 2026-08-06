@@ -267,9 +267,13 @@ class TimedAction(TimedData):
 class TimedObservation(TimedData):
     observation: RawObservation
     must_go: bool = False
+    debug_capture_id: str | None = None
 
     def get_observation(self):
         return self.observation
+
+    def get_debug_capture_id(self):
+        return self.debug_capture_id
 
 
 @dataclass
