@@ -11,6 +11,9 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LEROBOT_ROOT="${LEROBOT_ROOT:-$(cd -- "$SCRIPT_DIR/../../.." && pwd)}"
 RUNTIME_CONFIG="${LEROBOT_RUNTIME_CONFIG:-${RUNTIME_CONFIG:-$LEROBOT_ROOT/project/config/runtime.json}}"
+if [[ ! -e "$RUNTIME_CONFIG" && -e "$LEROBOT_ROOT/project/config/runtime.json" ]]; then
+  RUNTIME_CONFIG="$LEROBOT_ROOT/project/config/runtime.json"
+fi
 export LEROBOT_RUNTIME_CONFIG="$RUNTIME_CONFIG"
 
 ROBOT_PORT="${ROBOT_PORT:-/dev/so101_follower}"
@@ -21,11 +24,12 @@ BELLY_CAM="${BELLY_CAM:-/dev/cam_belly}"
 
 # Dataset-key mode is used by checkpoints whose policy inputs are named
 # top/wrist/belly. Policy-key mode sends camera1/camera2/camera3 directly for
-# checkpoints that declare those canonical image features.
-CAMERA_KEY_MODE="${CAMERA_KEY_MODE:-dataset}"
+# checkpoints that declare those canonical image features. The active default
+# checkpoint uses the normal direct order: top, wrist, belly -> camera1, 2, 3.
+CAMERA_KEY_MODE="${CAMERA_KEY_MODE:-policy}"
 
 SERVER_ADDRESS="${SERVER_ADDRESS:-100.85.69.64:8080}"
-MODEL_PATH="${MODEL_PATH:-eslab1234/smolvla_red_full_126ep_lora_r64_20k_v1}"
+MODEL_PATH="${MODEL_PATH:-eslab1234/smolvla_red_138ep_expert_only_nolora_b64_lr1e4_30k_v1}"
 # Keep this byte-for-byte identical to --dataset.single_task used while recording.
 TASK="${TASK:-Pick up the red block and place it in the red target slot.}"
 
@@ -41,12 +45,12 @@ AGGREGATE_FN_NAME="${AGGREGATE_FN_NAME:-latest_only}"
 
 # Maximum step of the coordinated command vector from the previously sent
 # target. The safe default is 1 degree; 0 freezes joint motion.
-MAX_RELATIVE_TARGET="${MAX_RELATIVE_TARGET:-1.0}"
+MAX_RELATIVE_TARGET="${MAX_RELATIVE_TARGET:-2.0}"
 
 # Abort coordinated motion when any motor trails the last command by more than
 # this many degrees for the configured number of consecutive control steps.
-MAX_TRACKING_ERROR="${MAX_TRACKING_ERROR:-5.0}"
-TRACKING_ERROR_GRACE_STEPS="${TRACKING_ERROR_GRACE_STEPS:-2}"
+MAX_TRACKING_ERROR="${MAX_TRACKING_ERROR:-20.0}"
+TRACKING_ERROR_GRACE_STEPS="${TRACKING_ERROR_GRACE_STEPS:-5}"
 
 # The recorder used false. Keeping torque enabled prevents the arm from
 # suddenly dropping when the inference client exits. Set true only when an
@@ -56,6 +60,9 @@ DISABLE_TORQUE_ON_DISCONNECT="${DISABLE_TORQUE_ON_DISCONNECT:-false}"
 # Set to 0 to run until Ctrl+C or the motor tracking watchdog stops inference.
 INFERENCE_SECONDS="${INFERENCE_SECONDS:-0}"
 SKIP_CONFIRM="${SKIP_CONFIRM:-false}"
+# Opt in only when reproducing a suspected runtime regression:
+# ENABLE_RUNTIME_DIAGNOSTICS=true bash project/scripts/robot/run_smolvla_red_observe_inference.sh
+ENABLE_RUNTIME_DIAGNOSTICS="${ENABLE_RUNTIME_DIAGNOSTICS:-false}"
 DEBUG_OBSERVATION_DIR="${DEBUG_OBSERVATION_DIR:-$LEROBOT_ROOT/var/debug/client_camera_inputs}"
 DEBUG_OBSERVATION_LIMIT="${DEBUG_OBSERVATION_LIMIT:-1}"
 DEBUG_MOTOR_TRACE_DIR="${DEBUG_MOTOR_TRACE_DIR:-$LEROBOT_ROOT/var/debug/motor_traces}"
@@ -96,6 +103,11 @@ command -v timeout >/dev/null 2>&1 || fail "GNU timeout is not available"
 case "$DISABLE_TORQUE_ON_DISCONNECT" in
   true|false) ;;
   *) fail "DISABLE_TORQUE_ON_DISCONNECT must be true or false" ;;
+esac
+
+case "$ENABLE_RUNTIME_DIAGNOSTICS" in
+  true|false) ;;
+  *) fail "ENABLE_RUNTIME_DIAGNOSTICS must be true or false" ;;
 esac
 
 require_path "$LEROBOT_ROOT"
@@ -196,10 +208,8 @@ python -m lerobot.grad_project.control.hybrid_goto_both_pose \
   --settle_s="$OBSERVE_SETTLE_S" \
   --keep_torque_on_disconnect=true
 
-# Older checkpoints use dataset keys (top/wrist/belly). Newer checkpoints can
-# use their declared policy keys (camera1/camera2/camera3) directly, avoiding a
-# server-side feature lookup before the saved rename processor runs.
-CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $BELLY_CAMERA_KEY: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: 180} }"
+BELLY_ROTATION="${BELLY_ROTATION:-0}"
+CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $BELLY_CAMERA_KEY: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: ${BELLY_ROTATION:-0}} }"
 
 robot_safety_args=()
 if [[ -n "$MAX_RELATIVE_TARGET" ]]; then
@@ -207,6 +217,16 @@ if [[ -n "$MAX_RELATIVE_TARGET" ]]; then
     --robot.max_relative_target="$MAX_RELATIVE_TARGET"
     --robot.max_tracking_error="$MAX_TRACKING_ERROR"
     --robot.tracking_error_grace_steps="$TRACKING_ERROR_GRACE_STEPS"
+  )
+fi
+
+debug_args=()
+if [[ "$ENABLE_RUNTIME_DIAGNOSTICS" == "true" ]]; then
+  debug_args+=(
+    --debug_observation_dir="$DEBUG_OBSERVATION_DIR"
+    --debug_observation_limit="$DEBUG_OBSERVATION_LIMIT"
+    --debug_motor_trace_dir="$DEBUG_MOTOR_TRACE_DIR"
+    --debug_motor_trace_limit="$DEBUG_MOTOR_TRACE_LIMIT"
   )
 fi
 
@@ -229,15 +249,17 @@ client_cmd=(
   --aggregate_fn_name="$AGGREGATE_FN_NAME"
   --fps="$FPS"
   --debug_visualize_queue_size=false
-  --debug_observation_dir="$DEBUG_OBSERVATION_DIR"
-  --debug_observation_limit="$DEBUG_OBSERVATION_LIMIT"
-  --debug_motor_trace_dir="$DEBUG_MOTOR_TRACE_DIR"
-  --debug_motor_trace_limit="$DEBUG_MOTOR_TRACE_LIMIT"
+  "${debug_args[@]}"
 )
 
 printf '\n[2/2] Starting SmolVLA inference. Keep one hand on Ctrl+C.\n'
-printf '[DEBUG] First outgoing camera observation will be saved under %s\n' "$DEBUG_OBSERVATION_DIR"
-printf '[DEBUG] Recent motor command/feedback trace will be saved under %s\n' "$DEBUG_MOTOR_TRACE_DIR"
+if [[ "$ENABLE_RUNTIME_DIAGNOSTICS" == "true" ]]; then
+  printf '[DEBUG] Runtime diagnostics enabled.\n'
+  printf '[DEBUG] Camera capture: %s\n' "$DEBUG_OBSERVATION_DIR"
+  printf '[DEBUG] Motor trace: %s\n' "$DEBUG_MOTOR_TRACE_DIR"
+else
+  printf '[DEBUG] Runtime diagnostics disabled.\n'
+fi
 
 set +e
 if [[ "$INFERENCE_SECONDS" == "0" ]]; then

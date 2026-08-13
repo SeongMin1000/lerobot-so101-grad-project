@@ -55,3 +55,24 @@ generated_group,ignored,src/**/__pycache__/**,Python bytecode 등 363파일,A,�
 generated_group,ignored,assets/opencv/calibration/**,calibration 이미지 25파일,A,var/calibration 또는 별도 실험 보관
 generated_group,ignored,logs/**,로그 10파일,A,var/logs로 이동
 generated_group,ignored,outputs/**,출력 이미지 2파일,A,var/outputs로 이동
+agent_rule,modified,AGENTS.md,Antigravity 프로젝트 계약·안전·스킬 라우팅,A,프로젝트 규칙 변경 시 함께 갱신
+agent_skill,added,.agents/skills/so101-record-data/SKILL.md,촬영·recovery 데이터 워크플로,A,recorder 변경 시 검토
+agent_skill,added,.agents/skills/so101-train-policy/SKILL.md,학습·LoRA·checkpoint 워크플로,A,LeRobot CLI 변경 시 검토
+agent_skill,added,.agents/skills/so101-run-inference/SKILL.md,GPU 서버·로봇 클라이언트 안전 실행,A,launcher 변경 시 검토
+agent_skill,added,.agents/skills/so101-diagnose-runtime/SKILL.md,입력부터 모터까지 단계별 진단,A,회귀 진단 변경 시 검토
+agent_skill,added,.agents/skills/so101-evaluate-experiment/SKILL.md,구역·실패코드·공식 시간 평가,A,평가 기준 변경 시 검토
+agent_skill,added,.agents/skills/so101-maintain-project/SKILL.md,경로·import·Git·회귀검사 유지보수,A,구조 변경 시 검토
+agent_skill,added,.agents/skills/so101-package-demo/SKILL.md,Jetson·Docker·최종 리허설,A,평가 서버 확정 시 갱신
+agent_profile,added,project/config/experiment-profiles/active.env.example,비밀정보 없는 공유 profile 템플릿,A,필수 변수 변경 시 갱신
+agent_profile,added_ignored,project/config/experiment-profiles/active.env,2026-08-06 현재 실험 profile,A,모델·네트워크·파라미터 선택 시 갱신
+agent_context,added,project/docs/agent-context/project-contract.md,프로젝트 고정 계약,A,공식 목표·안전 계약 변경 시 갱신
+agent_context,added,project/docs/agent-context/hardware-and-paths.md,장비·경로·변수·전처리 기준,A,장비·경로 변경 시 갱신
+agent_context,added,project/docs/agent-context/dataset-model-registry.md,데이터셋·모델 상태 레지스트리,A,학습·평가 후 갱신
+agent_context,added,project/docs/agent-context/experiment-history.md,실험 단계와 핵심 결과,A,중요 실험 후만 갱신
+agent_context,added,project/docs/agent-context/decisions-and-known-failures.md,확정 결정·실패·미해결 항목,A,원인 확정·해결 시 갱신
+agent_context,added,project/docs/agent-context/graduation-requirements.md,공식 v1.5·v2.0·추가 안내 정리,A,새 공지 수신 시 갱신
+agent_context,added,project/docs/agent-context/roadmap.md,Task1·Task2·Jetson·Docker 로드맵,A,단계 완료 시 갱신
+agent_context,added,project/docs/agent-context/evaluation-log-template.csv,trial ID 없는 평가 로그 템플릿,A,평가 필드 변경 시 갱신
+agent_tool,added,project/scripts/tools/check_antigravity_setup.py,Antigravity 구조 읽기 전용 검증,A,스킬·profile 구조 변경 시 갱신
+active_custom_code,added,project/scripts/robot/run_act_red_observe_inference.sh,ACT 모델 observe 관측 포즈 신경망 추론 스크립트,A,유지
+ignore_rule,modified,.gitignore,active.env 로컬 유지 규칙,A,profile 정책 변경 시 검토
