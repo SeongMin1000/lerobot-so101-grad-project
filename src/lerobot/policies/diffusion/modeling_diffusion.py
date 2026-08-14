@@ -112,10 +112,12 @@ class DiffusionPolicy(PreTrainedPolicy):
             batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
         else:
             batch = dict(batch)
+            if OBS_STATE in batch and batch[OBS_STATE].ndim == 2:
+                batch[OBS_STATE] = batch[OBS_STATE].unsqueeze(1).repeat(1, self.config.n_obs_steps, 1)
             if self.config.image_features:
                 for key in self.config.image_features:
                     if batch[key].ndim == 4:
-                        batch[key] = batch[key].unsqueeze(1)
+                        batch[key] = batch[key].unsqueeze(1).repeat(1, self.config.n_obs_steps, 1, 1, 1)
                 batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
         actions = self.diffusion.generate_actions(batch, noise=noise)
         return actions
