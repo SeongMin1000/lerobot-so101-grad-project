@@ -74,5 +74,5 @@ agent_context,added,project/docs/agent-context/graduation-requirements.md,공식
 agent_context,added,project/docs/agent-context/roadmap.md,Task1·Task2·Jetson·Docker 로드맵,A,단계 완료 시 갱신
 agent_context,added,project/docs/agent-context/evaluation-log-template.csv,trial ID 없는 평가 로그 템플릿,A,평가 필드 변경 시 갱신
 agent_tool,added,project/scripts/tools/check_antigravity_setup.py,Antigravity 구조 읽기 전용 검증,A,스킬·profile 구조 변경 시 갱신
-active_custom_code,added,project/scripts/robot/run_act_red_observe_inference.sh,ACT 모델 observe 관측 포즈 신경망 추론 스크립트,A,유지
+active_custom_code,added,project/scripts/robot/run_red_observe_inference.sh,통합 observe 관측 포즈 비동기 추론 스크립트(ACT/Diffusion/SmolVLA),A,유지
 ignore_rule,modified,.gitignore,active.env 로컬 유지 규칙,A,profile 정책 변경 시 검토
