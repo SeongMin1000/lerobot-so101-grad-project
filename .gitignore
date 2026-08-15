@@ -14,6 +14,7 @@
 
 ### Environments & Dependencies ###
 .env
+/project/config/experiment-profiles/active.env
 .venv
 env/
 venv/
