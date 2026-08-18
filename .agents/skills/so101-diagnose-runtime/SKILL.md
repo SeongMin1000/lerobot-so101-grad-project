@@ -65,6 +65,7 @@ Verify:
 
 - top/wrist physical identity and no swapped USB aliases (side/belly camera is unused);
 - 640x480, MJPG, 30 FPS actually negotiated;
+- top camera V4L2 controls adhere to defaults (Auto WB, brightness 0, contrast 40, saturation 64, gamma 300);
 - RGB/BGR conversion is correct;
 - client and server capture pixel content match;
 - image values are normalized to `[0,1]` exactly once;

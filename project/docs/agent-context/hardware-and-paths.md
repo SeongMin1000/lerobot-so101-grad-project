@@ -30,6 +30,10 @@ Camera contract:
 - 30 FPS
 - MJPG
 - camera count: two (`top`, `wrist`; side/belly camera unused)
+- Top camera (`/dev/cam_top`) V4L2 hardware controls set to hardware defaults:
+  - `brightness=0`, `contrast=40`, `saturation=64`, `hue=0`, `gamma=300`, `sharpness=50`
+  - `white_balance_automatic=1` (Auto White Balance enabled), `power_line_frequency=1`
+  - `auto_exposure=3` (Aperture Priority Mode), `backlight_compensation=0`
 
 Use stable udev aliases above. Do not replace them with transient `/dev/videoN`
 paths in committed scripts.

@@ -53,7 +53,7 @@ python -m lerobot.grad_project.paths
 ls -l "$ROBOT_PORT" "$TELEOP_PORT" "$TOP_CAM" "$WRIST_CAM"
 ```
 
-Then verify each camera really delivers 640x480@30 MJPG and that no other
+Then verify each camera really delivers 640x480@30 MJPG (Top camera using factory default V4L2 parameters: Auto WB, brightness 0, contrast 40, saturation 64, gamma 300) and that no other
 process owns it. Stop if the wrist camera reports repeated read failures.
 
 Do not move either arm until the user explicitly requests a physical run and a

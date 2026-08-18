@@ -77,11 +77,10 @@ apply_top_camera_profile() {
   set_control "$TOP_CAM" contrast 40
   set_control "$TOP_CAM" saturation 64
   set_control "$TOP_CAM" hue 0
-  set_control "$TOP_CAM" white_balance_automatic 0
-  set_control "$TOP_CAM" white_balance_temperature 4600
+  set_control "$TOP_CAM" white_balance_automatic 1
   set_control "$TOP_CAM" gamma 300
   set_control "$TOP_CAM" sharpness 50
-  set_control "$TOP_CAM" power_line_frequency 2
+  set_control "$TOP_CAM" power_line_frequency 1
   set_control "$TOP_CAM" backlight_compensation 0
   set_control "$TOP_CAM" auto_exposure 3
   set_control "$TOP_CAM" exposure_dynamic_framerate 0
