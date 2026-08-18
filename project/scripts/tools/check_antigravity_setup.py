@@ -23,6 +23,7 @@ SKILLS = (
     "so101-evaluate-experiment",
     "so101-maintain-project",
     "so101-package-demo",
+    "jetson-lerobot-setup",
 )
 
 CONTEXT_FILES = (
