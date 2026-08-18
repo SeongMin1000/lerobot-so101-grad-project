@@ -1,0 +1,2 @@
+실험일,run_name,model_id,dataset_id,git_commit,server_state,zone,배치_회차,task,red_position,other_blocks_layout,actions_per_chunk,chunk_threshold,aggregate,max_relative_target,max_tracking_error,grace_steps,result_code,elapsed_s,approach_error_cm,approach_error_direction,grasp_angle_ok,release_ok,safety_stop,notes
+2026-08-06,example_run,eslab1234/example_model,eslab1234/example_dataset,abcdef12,cold,B,1회차,red_pick_place,B구역_왼쪽끝,나머지_4블록_랜덤,30,0.6,latest_only,0.75,5.0,2,접,0,3.0,오른쪽,false,false,false,예시행_실험전삭제
