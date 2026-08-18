@@ -37,13 +37,13 @@ python project/scripts/tools/check_antigravity_setup.py
 ```
 
 On the GPU PC, confirm port availability, source import, CUDA, free VRAM, and
-checkpoint loadability. On the robot PC, confirm all five device paths and the
-runtime JSON before movement.
+checkpoint loadability. On the robot PC, confirm robot and camera device paths
+and the runtime JSON before movement.
 
 Inspect the checkpoint's image features and saved processor rename map. Set:
 
-- `CAMERA_KEY_MODE=dataset` for raw `top/wrist/belly` plus a valid saved rename;
-- `CAMERA_KEY_MODE=policy` for direct `camera1/camera2/camera3` inputs.
+- `CAMERA_KEY_MODE=dataset` for raw `top/wrist` (or historical `top/wrist/belly`) plus a valid saved rename;
+- `CAMERA_KEY_MODE=policy` for direct `camera1/camera2` (or historical 3-cam `camera1/camera2/camera3`) inputs (side/belly camera is unused).
 
 Do not guess from an old model name.
 
@@ -80,7 +80,7 @@ parameters, so it is for reproduction rather than the active profile.
 Before typing `START`, verify the launcher's printed values:
 
 - exact model and task;
-- top/wrist/belly key mapping and belly rotation;
+- top/wrist key mapping (side/belly camera is unused);
 - server endpoint;
 - actions per chunk, threshold, and aggregation;
 - maximum coordinated step;

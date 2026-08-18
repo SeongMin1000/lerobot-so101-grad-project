@@ -107,8 +107,7 @@ Changing that membership requires implementation, tests, and hardware review.
 
 ## Data contract
 
-- Record three cameras at `640 x 480`, 30 FPS, MJPG.
-- Rotate the belly camera by 180 degrees in the robot configuration.
+- Record two cameras (Top and Wrist) at `640 x 480`, 30 FPS, MJPG (Side/Belly camera is unused).
 - Keep the natural-language task byte-for-byte consistent between recording,
   training metadata, and inference unless deliberately relabeling the dataset.
 - Save only completed, valid demonstrations. The custom recorder uses right

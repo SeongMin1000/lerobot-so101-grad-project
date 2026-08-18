@@ -63,8 +63,7 @@ symptoms are not root-cause evidence.
 
 Verify:
 
-- top/wrist/belly physical identity and no swapped USB aliases;
-- belly is rotated exactly once;
+- top/wrist physical identity and no swapped USB aliases (side/belly camera is unused);
 - 640x480, MJPG, 30 FPS actually negotiated;
 - RGB/BGR conversion is correct;
 - client and server capture pixel content match;

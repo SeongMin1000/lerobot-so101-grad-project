@@ -24,7 +24,7 @@ A comprehensive guide and reference for configuring Hugging Face LeRobot 0.5.2+ 
 ### 1.2 Edge vs Server Role Division
 
 ```
-[SO-100 / SO-101 Arm Motors] + [UVC Cameras (Top / Wrist / Belly)]
+[SO-100 / SO-101 Arm Motors] + [UVC Cameras (Top / Wrist; Side/Belly unused)]
                         ▲
                         │ (USB Serial & UVC Video)
                         ▼
@@ -186,7 +186,7 @@ pip install feetech-servo-sdk
 Ensure persistent udev rules exist for serial ports and cameras:
 - Follower arm: `/dev/so101_follower`
 - Leader arm: `/dev/so101_leader`
-- Cameras: `/dev/cam_top`, `/dev/cam_wrist`, `/dev/cam_belly`
+- Cameras: `/dev/cam_top`, `/dev/cam_wrist` (Side/Belly camera `/dev/cam_belly` is unused)
 
 ### 5.3 JetPack 7.2 Upgrade Fallback
 If CPU-only execution is insufficient for customized real-time edge processing:

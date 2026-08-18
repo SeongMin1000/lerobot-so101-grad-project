@@ -70,7 +70,7 @@ freeze.
 Verify on Jetson:
 
 - stable `/dev/so101_follower`, `/dev/so101_leader`, and camera aliases;
-- 640x480@30 MJPG for all cameras and belly 180-degree rotation;
+- 640x480@30 MJPG for configured cameras (Top and Wrist; Side/Belly unused);
 - CPU/GPU camera decode and preprocessing throughput;
 - network route and latency to the evaluation server;
 - control-loop FPS, queue behavior, coordinated limiter, and watchdog;
@@ -111,7 +111,7 @@ Test:
 
 - cold image/container startup;
 - cold and warm client connections;
-- all three cameras;
+- active cameras (Top and Wrist; Side/Belly unused);
 - wrong-color prevention and priority FSM;
 - release and target verification;
 - server disconnect/reconnect;

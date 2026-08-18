@@ -9,7 +9,7 @@ Last synchronized: 2026-08-06
 - Keep automatic observe return outside recorded episodes.
 - Use right arrow to save only a completed demonstration; discard left arrow,
   timeout, and Escape attempts.
-- Use three cameras at 640x480@30 MJPG; rotate belly 180 degrees.
+- Side/belly camera is completely deprecated/unused. Standard setup uses two cameras (Top and Wrist) at 640x480@30 MJPG.
 - Use `latest_only` as the current action aggregation reference.
 - Keep physical `START` confirmation and torque enabled on graceful exit.
 - Preserve aspect ratio for SmolVLA and normalize image values exactly once.

@@ -50,7 +50,7 @@ source project/config/experiment-profiles/active.env
 
 python -m lerobot.grad_project.recording.smolvla_record_observe_return --help
 python -m lerobot.grad_project.paths
-ls -l "$ROBOT_PORT" "$TELEOP_PORT" "$TOP_CAM" "$WRIST_CAM" "$BELLY_CAM"
+ls -l "$ROBOT_PORT" "$TELEOP_PORT" "$TOP_CAM" "$WRIST_CAM"
 ```
 
 Then verify each camera really delivers 640x480@30 MJPG and that no other
@@ -78,7 +78,7 @@ python -m lerobot.grad_project.recording.smolvla_record_observe_return \
   --teleop.type=so101_leader \
   --teleop.port="$TELEOP_PORT" \
   --teleop.id=leader \
-  --robot.cameras="{ top: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, wrist: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, belly: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: 180} }" \
+  --robot.cameras="{ top: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, wrist: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'} }" \
   --dataset.repo_id="$HF_USER/$DATASET_NAME" \
   --dataset.single_task="$TASK" \
   --dataset.num_episodes="$NUM_EPISODES" \
@@ -142,7 +142,7 @@ Before merging or training, inspect:
 - task text for every episode;
 - FPS and timestamps;
 - `observation.state` and `action` shapes/names;
-- top, wrist, and belly feature keys and orientation;
+- top and wrist feature keys and orientation (side/belly camera is unused);
 - decoded videos at beginning, grasp, transport, release, and final hold;
 - non-empty actions and absence of NaN/Inf values;
 - incomplete temporary frames from discarded attempts;

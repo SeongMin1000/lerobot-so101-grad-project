@@ -22,15 +22,14 @@ The Tailscale address is an active-profile value, not a permanent constant.
 | SO-101 leader | `/dev/so101_leader` |
 | Top camera | `/dev/cam_top` |
 | Wrist camera | `/dev/cam_wrist` |
-| Belly camera | `/dev/cam_belly` |
+| Belly / Side camera (Deprecated) | `/dev/cam_belly` (Unused) |
 
 Camera contract:
 
 - `640 x 480`
 - 30 FPS
 - MJPG
-- belly rotation: 180 degrees
-- camera count: three
+- camera count: two (`top`, `wrist`; side/belly camera unused)
 
 Use stable udev aliases above. Do not replace them with transient `/dev/videoN`
 paths in committed scripts.
@@ -118,8 +117,8 @@ Two valid naming layers exist:
 
 | Mode | Raw observation keys | Use when |
 | --- | --- | --- |
-| `dataset` | `top`, `wrist`, `belly` | Checkpoint preprocessor contains a saved rename map to policy keys |
-| `policy` | `camera1`, `camera2`, `camera3` | Checkpoint declares those canonical image features directly |
+| `dataset` | `top`, `wrist` (historical 3-cam: `top`, `wrist`, `belly`) | Checkpoint preprocessor contains a saved rename map to policy keys |
+| `policy` | `camera1`, `camera2` (historical 3-cam: `camera1`, `camera2`, `camera3`) | Checkpoint declares those canonical image features directly |
 
 Do not guess. Inspect checkpoint `config.json`, processor config, dataset
 features, and policy-server log of the effective rename map. A mismatch can

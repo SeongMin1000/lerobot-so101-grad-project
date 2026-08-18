@@ -43,14 +43,14 @@ Verify before allocating the GPU:
 1. Dataset exists at the intended Hub ID or local root.
 2. Episode count, task values, FPS, robot type, and video files are complete.
 3. State/action feature names, order, shape, dtype, and stats are sensible.
-4. All three cameras decode and belly orientation is correct.
-5. Dataset image keys match the requested rename strategy.
+4. Configured cameras (Top and Wrist; Side/Belly unused) decode properly.
+5. Dataset image keys match the requested rename strategy (e.g. `top->camera1, wrist->camera2` for 2-camera policies, or historical 3-cam maps).
 6. Train/validation split or the lack of one is explicit.
 7. Relabeled data still describes the recorded behavior truthfully.
 8. Recovery and nominal examples are balanced for the intended comparison.
 
-For `top/wrist/belly` datasets targeting a policy that expects
-`camera1/camera2/camera3`, inspect whether the training command needs a rename
+For `top/wrist` datasets targeting a policy that expects
+`camera1/camera2`, inspect whether the training command needs a rename
 map and whether that rename processor is saved with the checkpoint. Never apply
 two competing rename maps.
 
