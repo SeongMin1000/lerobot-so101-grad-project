@@ -59,13 +59,15 @@ fail() {
   exit 1
 }
 
-[[ "${CONDA_DEFAULT_ENV:-}" == "lerobot" ]] || fail "Activate first: conda activate lerobot"
+[[ "${CONDA_DEFAULT_ENV:-}" =~ ^(lerobot|lerobot312)$ ]] || fail "Activate first: conda activate lerobot (or lerobot312)"
 command -v python >/dev/null 2>&1 || fail "python command not found"
 
 [[ -e "$ROBOT_PORT" ]] || fail "Follower port $ROBOT_PORT not found"
 [[ -e "$TOP_CAM" ]] || fail "Top camera $TOP_CAM not found"
 [[ -e "$WRIST_CAM" ]] || fail "Wrist camera $WRIST_CAM not found"
-[[ -e "$BELLY_CAM" ]] || fail "Belly camera $BELLY_CAM not found"
+if [[ -e "$BELLY_CAM" ]]; then
+  true
+fi
 
 case "$CAMERA_KEY_MODE" in
   dataset)
@@ -163,9 +165,11 @@ python -m lerobot.grad_project.control.hybrid_goto_both_pose \
   --settle_s="$OBSERVE_SETTLE_S" \
   --keep_torque_on_disconnect=true
 
-sleep 1.0
-
-CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $BELLY_CAMERA_KEY: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: ${BELLY_ROTATION:-0}} }"
+if [[ -e "$BELLY_CAM" ]]; then
+  CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $BELLY_CAMERA_KEY: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: ${BELLY_ROTATION:-0}} }"
+else
+  CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'} }"
+fi
 
 robot_safety_args=()
 if [[ -n "$MAX_RELATIVE_TARGET" ]]; then

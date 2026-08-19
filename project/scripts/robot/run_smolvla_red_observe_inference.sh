@@ -94,8 +94,8 @@ require_path() {
   [[ -e "$target_path" ]] || fail "Required path not found: $target_path"
 }
 
-[[ "${CONDA_DEFAULT_ENV:-}" == "lerobot" ]] || fail \
-  "Activate the environment first: conda activate lerobot"
+[[ "${CONDA_DEFAULT_ENV:-}" =~ ^(lerobot|lerobot312)$ ]] || fail \
+  "Activate the environment first: conda activate lerobot (or lerobot312)"
 
 command -v python >/dev/null 2>&1 || fail "python is not available"
 command -v timeout >/dev/null 2>&1 || fail "GNU timeout is not available"
@@ -116,7 +116,9 @@ require_path "$ROBOT_PORT"
 require_path "$TELEOP_PORT"
 require_path "$TOP_CAM"
 require_path "$WRIST_CAM"
-require_path "$BELLY_CAM"
+if [[ -e "$BELLY_CAM" ]]; then
+  require_path "$BELLY_CAM"
+fi
 require_path "$LEROBOT_ROOT/src/lerobot/grad_project/control/hybrid_goto_both_pose.py"
 
 cd "$LEROBOT_ROOT"
@@ -177,8 +179,13 @@ PY
 
 printf '\nModel:  %s\n' "$MODEL_PATH"
 printf 'Task:   %s\n' "$TASK"
-printf 'Images: top=%s, wrist=%s, belly=%s(rotated 180 degrees)\n' \
-  "$TOP_CAMERA_KEY" "$WRIST_CAMERA_KEY" "$BELLY_CAMERA_KEY"
+if [[ -e "$BELLY_CAM" ]]; then
+  printf 'Images: top=%s, wrist=%s, belly=%s (rotated %s degrees)\n' \
+    "$TOP_CAMERA_KEY" "$WRIST_CAMERA_KEY" "$BELLY_CAMERA_KEY" "${BELLY_ROTATION:-0}"
+else
+  printf 'Images: top=%s, wrist=%s (2-camera setup)\n' \
+    "$TOP_CAMERA_KEY" "$WRIST_CAMERA_KEY"
+fi
 printf 'Limit:  %ss (Ctrl+C stops earlier)\n\n' "$INFERENCE_SECONDS"
 printf 'Torque off on graceful exit: %s\n\n' "$DISABLE_TORQUE_ON_DISCONNECT"
 printf 'Chunk:  %s actions, threshold=%s, aggregation=%s\n' \
@@ -209,7 +216,11 @@ python -m lerobot.grad_project.control.hybrid_goto_both_pose \
   --keep_torque_on_disconnect=true
 
 BELLY_ROTATION="${BELLY_ROTATION:-0}"
-CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $BELLY_CAMERA_KEY: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: ${BELLY_ROTATION:-0}} }"
+if [[ -e "$BELLY_CAM" ]]; then
+  CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $BELLY_CAMERA_KEY: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: ${BELLY_ROTATION:-0}} }"
+else
+  CAMERAS="{ $TOP_CAMERA_KEY: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, $WRIST_CAMERA_KEY: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'} }"
+fi
 
 robot_safety_args=()
 if [[ -n "$MAX_RELATIVE_TARGET" ]]; then

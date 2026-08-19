@@ -68,7 +68,7 @@ case "$PUSH_TO_HUB" in true|false) ;; *) fail "PUSH_TO_HUB must be true or false
 case "$STREAMING_ENCODING" in true|false) ;; *) fail "STREAMING_ENCODING must be true or false" ;; esac
 case "$PLAY_SOUNDS" in true|false) ;; *) fail "PLAY_SOUNDS must be true or false" ;; esac
 
-[[ "${CONDA_DEFAULT_ENV:-}" == "lerobot" ]] || fail "Activate first: conda activate lerobot"
+[[ "${CONDA_DEFAULT_ENV:-}" =~ ^(lerobot|lerobot312)$ ]] || fail "Activate first: conda activate lerobot (or lerobot312)"
 [[ -t 0 ]] || fail "Run this robot-side HIL script in an interactive foreground terminal"
 command -v python >/dev/null 2>&1 || fail "python is not available"
 
@@ -78,7 +78,9 @@ require_path "$ROBOT_PORT"
 require_path "$TELEOP_PORT"
 require_path "$TOP_CAM"
 require_path "$WRIST_CAM"
-require_path "$BELLY_CAM"
+if [[ -e "$BELLY_CAM" ]]; then
+  require_path "$BELLY_CAM"
+fi
 require_path "$LEROBOT_ROOT/src/lerobot/grad_project/recording/smolvla_hil_record.py"
 
 python - "$SERVER_ADDRESS" <<'PY'
@@ -107,10 +109,11 @@ PY
 cd "$LEROBOT_ROOT"
 mkdir -p logs "$DEBUG_OBSERVATION_DIR" "$DEBUG_MOTOR_TRACE_DIR"
 
-# Keep top/wrist/belly here.  Those are the original dataset feature names;
-# the checkpoint's saved rename processor maps them to camera1/camera2/camera3
-# only on the GPU server.
-CAMERAS="{ top: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, wrist: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, belly: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: 180} }"
+if [[ -e "$BELLY_CAM" ]]; then
+  CAMERAS="{ top: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, wrist: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, belly: {type: opencv, index_or_path: '$BELLY_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG', rotation: 180} }"
+else
+  CAMERAS="{ top: {type: opencv, index_or_path: '$TOP_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'}, wrist: {type: opencv, index_or_path: '$WRIST_CAM', width: $WIDTH, height: $HEIGHT, fps: $FPS, fourcc: 'MJPG'} }"
+fi
 
 printf '\n[HIL CONFIG]\n'
 printf '  model:       %s\n' "$MODEL_PATH"
