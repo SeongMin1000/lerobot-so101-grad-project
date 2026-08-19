@@ -105,8 +105,8 @@ cd ~/lerobot
 # Register LeRobot without overwriting conda dependencies
 pip install --no-deps -e .
 
-# Install required runtime dependencies individually
-pip install datasets pyarrow fsspec pandas h5py zarr rerun-sdk draccus huggingface_hub diffusers cmake numba einops tqdm opencv-python imageio termcolor
+# Install required runtime dependencies individually (including async inference)
+pip install datasets pyarrow fsspec pandas h5py zarr rerun-sdk draccus huggingface_hub diffusers cmake numba einops tqdm opencv-python imageio termcolor grpcio protobuf
 
 # Remove incompatible ARM64 CUDA artifacts if present
 pip uninstall -y nvidia-cusparselt-cu13
