@@ -42,7 +42,7 @@ paths in committed scripts.
 
 - LeRobot version: `0.5.2`
 - Python: `>=3.12`
-- Conda environment used on development PCs: `lerobot` (Jetson edge environment: `lerobot312` with conda-forge CPU PyTorch 2.11.0)
+- Conda environment used across all machines (PC and Jetson edge): `lerobot` (Python 3.12, conda-forge CPU PyTorch 2.11.0 on Jetson)
 - Hugging Face namespace: `eslab1234`
 - Primary policy: SmolVLA
 - Async transport: gRPC/TCP-style LeRobot async inference over Tailscale

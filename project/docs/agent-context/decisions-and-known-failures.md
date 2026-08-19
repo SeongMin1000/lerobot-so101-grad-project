@@ -30,6 +30,7 @@ Last synchronized: 2026-08-06
 | `observation.images.top`/camera `KeyError` | Dataset/policy key mismatch occurred | checkpoint features, saved rename map, `CAMERA_KEY_MODE`, server log |
 | First chunk is strange after client restart | Old server retained `last_processed_obs` | verify current `Ready()` reset; restart server after code/preprocessor changes |
 | Repeated wrist camera read failure | `OpenCVCamera(/dev/cam_wrist) read failed` occurred | USB bandwidth/power, MJPG mode, device alias, competing process, cable |
+| `Required path not found: /dev/cam_belly` | Occurred on 2-camera setups when script enforced 3 cameras | Robot scripts updated to make belly cam optional and support 2-camera dict (`top` + `wrist`) |
 | Training command exits on unknown args | Per-transform `tfs.*` and `--eval_freq=0` were rejected | local `lerobot-train --help`; remove unsupported copied flags |
 | Training refuses output directory | `FileExistsError` when resume was false | new run/output name or supported resume; never delete by default |
 | PEFT adapter config 404 | Adapter/full-checkpoint loading ambiguity | inspect Hub files and `adapter_config.json`; test load before robot run |

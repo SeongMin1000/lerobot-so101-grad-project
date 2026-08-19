@@ -17,7 +17,7 @@ A comprehensive guide and reference for configuring Hugging Face LeRobot 0.5.2+ 
 | **OS / JetPack** | JetPack 6.2.1 / L4T R36.4.4 | Ubuntu 22.04 LTS (`jammy`) |
 | **NVIDIA Driver** | 540.4.0 (CUDA 12.6 driver support) | System level |
 | **CUDA Toolkit** | CUDA 12.6.68 (`nvcc 12.6`) | System level |
-| **Python Runtime** | Python 3.12.13 | Conda virtual environment (`lerobot312`) |
+| **Python Runtime** | Python 3.12.13 | Conda virtual environment (`lerobot`) |
 | **LeRobot Framework** | `v0.5.2` | Local repository clone (`~/lerobot`) |
 | **PyTorch / TorchVision** | PyTorch 2.11.0 / TorchVision 0.26.0 | `conda-forge` CPU build (self-contained `.so`) |
 
@@ -94,8 +94,8 @@ A comprehensive guide and reference for configuring Hugging Face LeRobot 0.5.2+ 
 
 ### Step 1: Create Conda Environment and Install PyTorch
 ```bash
-conda create -n lerobot312 python=3.12 -y
-conda activate lerobot312
+conda create -n lerobot python=3.12 -y
+conda activate lerobot
 conda install -c conda-forge pytorch=2.11.0 torchvision -y
 ```
 
@@ -156,17 +156,17 @@ pip cache purge
 conda clean --all -y
 
 # 3. Remove obsolete virtual environments (~8.0 GB+)
-rm -rf ~/miniforge3/envs/lerobot ~/miniforge3/envs/lerobot310 ~/miniforge3/envs/'lerobot_gpu '
+rm -rf ~/miniforge3/envs/lerobot310 ~/miniforge3/envs/'lerobot_gpu '
 
 # 4. Remove residual CUDA 13 site-packages (~1.7 GB)
-rm -rf ~/miniforge3/envs/lerobot312/lib/python3.12/site-packages/nvidia/cu13
+rm -rf ~/miniforge3/envs/lerobot/lib/python3.12/site-packages/nvidia/cu13
 ```
 
 Confirm active environments:
 ```bash
 conda env list
 # base
-# lerobot312  <-- Primary working environment
+# lerobot  <-- Primary working environment (unified across PC and Jetson)
 ```
 
 ---
