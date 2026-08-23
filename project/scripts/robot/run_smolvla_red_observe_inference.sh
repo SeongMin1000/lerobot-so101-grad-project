@@ -75,17 +75,22 @@ fail() {
 
 case "$CAMERA_KEY_MODE" in
   dataset)
-    TOP_CAMERA_KEY=top
-    WRIST_CAMERA_KEY=wrist
-    BELLY_CAMERA_KEY=belly
+    TOP_CAMERA_KEY="${TOP_CAMERA_KEY:-top}"
+    WRIST_CAMERA_KEY="${WRIST_CAMERA_KEY:-wrist}"
+    BELLY_CAMERA_KEY="${BELLY_CAMERA_KEY:-belly}"
+    ;;
+  dataset_side|side)
+    TOP_CAMERA_KEY="${TOP_CAMERA_KEY:-top}"
+    WRIST_CAMERA_KEY="${WRIST_CAMERA_KEY:-wrist}"
+    BELLY_CAMERA_KEY="${BELLY_CAMERA_KEY:-side}"
     ;;
   policy)
-    TOP_CAMERA_KEY=camera1
-    WRIST_CAMERA_KEY=camera2
-    BELLY_CAMERA_KEY=camera3
+    TOP_CAMERA_KEY="${TOP_CAMERA_KEY:-camera1}"
+    WRIST_CAMERA_KEY="${WRIST_CAMERA_KEY:-camera2}"
+    BELLY_CAMERA_KEY="${BELLY_CAMERA_KEY:-camera3}"
     ;;
   *)
-    fail "CAMERA_KEY_MODE must be dataset or policy"
+    fail "CAMERA_KEY_MODE must be dataset, dataset_side, or policy"
     ;;
 esac
 

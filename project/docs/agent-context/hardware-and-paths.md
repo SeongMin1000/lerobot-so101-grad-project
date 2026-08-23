@@ -75,6 +75,14 @@ python -m lerobot.async_inference.robot_client --help
 | Robot launcher | `project/scripts/robot/run_smolvla_red_observe_inference.sh` |
 | Fixed historical safety wrapper | `project/scripts/robot/run_smolvla_red_latest_safe.sh` |
 | Runtime regression entry point | `project/scripts/tools/check_runtime_regressions.sh` |
+| 5-Block one-take recorder (v3) | `src/lerobot/grad_project/recording/hybrid_record_5blocks_onetake_v3.py` |
+| 5-Block recorder launcher | `project/scripts/robot/run_hybrid_5blocks_onetake_v3_record.sh` |
+| 34-Point ruler calibration | `project/config/grasp_pixel_to_robot_record.json` |
+| 34-Point ruler samples backup | `project/config/ruler_calibration_samples_record.json` |
+| 45-Point 2-step joint teacher | `project/scripts/tools/teach_block_hover_joints.py` |
+| 45-Point demonstration samples | `project/config/hover_demonstration_samples_record.json` |
+| Taught RBF joint model | `project/config/hover_joint_model_record.json` |
+| Leader wrist roll calibration | `project/config/calibration/teleoperators/so_leader/leader.json` |
 | Generated artifacts | `var/` |
 
 `run_smolvla_red_latest_safe.sh` intentionally assigns fixed values and will

@@ -34,6 +34,9 @@ Last synchronized: 2026-08-06
 | Training command exits on unknown args | Per-transform `tfs.*` and `--eval_freq=0` were rejected | local `lerobot-train --help`; remove unsupported copied flags |
 | Training refuses output directory | `FileExistsError` when resume was false | new run/output name or supported resume; never delete by default |
 | PEFT adapter config 404 | Adapter/full-checkpoint loading ambiguity | inspect Hub files and `adapter_config.json`; test load before robot run |
+| Taught hover joint model fallback to IK | `KeyError: 'shoulder_lift.pos'` due to missing `.pos` suffix in output dict | Ensure `pose_hover` uses `{f"{n}.pos": val}` keys matching action features |
+| Wrist pitches down instead of up during flight | `wrist_flex` sign inversion in motor convention | Negative bump `cmd["wrist_flex.pos"] -= bump * sin(pi*s)` lifts wrist up towards horizon |
+| Camera occlusion by robot arm during joint teaching | Arm covering block caused YOLO to detect arm parts | Use 2-step (Snapshot unoccluded -> Teach follower joints) workflow |
 
 ## Preprocessing facts
 

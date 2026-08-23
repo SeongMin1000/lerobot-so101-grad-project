@@ -224,8 +224,13 @@ class SOFollower(Robot):
                 self.bus.write("D_Coefficient", motor, 32)
 
                 if motor == "gripper":
-                    self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
-                    self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
+                    # gripper_close_value targets the fully-closed position, so a
+                    # held block never lets the servo reach it -- it pushes at
+                    # this cap continuously for as long as the grasp is held,
+                    # not just on contact. 50% was still enough to shatter a
+                    # printed jaw, so this caps it well below that.
+                    self.bus.write("Max_Torque_Limit", motor, 200)  # 20% of max torque
+                    self.bus.write("Protection_Current", motor, 100)  # 20% of max current
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
     def setup_motors(self) -> None:

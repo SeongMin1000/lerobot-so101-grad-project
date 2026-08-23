@@ -1,0 +1,29 @@
+{
+  "homography_pixel_to_robot_xy_m": [
+    [
+      -0.0002465597013680715,
+      0.0018316779071641425,
+      -0.05814295961061013
+    ],
+    [
+      0.0013265333606628511,
+      0.00026285518948029234,
+      -0.43881469034663007
+    ],
+    [
+      -5.6607298562482126e-05,
+      0.0009171602534535491,
+      1.0
+    ]
+  ],
+  "grasp_z_plane_abc": [
+    0.0647691607538159,
+    0.03412305720678402,
+    -0.0008722329752132549
+  ],
+  "grasp_z_mean_m": 0.012703556865184047,
+  "grasp_z_min_m": -0.012983093041816551,
+  "grasp_z_max_m": 0.03992824691341684,
+  "sample_count": 12,
+  "note": "Learned from leader-arm demonstrated grasps, so block-height parallax is already baked in. Maps top-camera pixel -> robot xy (m). Re-collect if the camera, table, or robot base moves."
+}

@@ -18,15 +18,49 @@ Read `dataset-model-registry.md` when extending or merging an existing dataset.
 
 ## Choose the recording mode
 
-- Use end-to-end SmolVLA recording for a complete pick/place or stack
-  demonstration.
-- Use `teleop_before_episode=true` for an offline recovery demonstration that
-  begins from a model-created failure state.
+- **Hybrid 5-Block One-Take Recording (`v3`)** [PRIMARY FOR TASK 1]:
+  - Records a continuous 5-block pick-and-place episode in one shot (`red, yellow, wood, green, blue`).
+  - Auto-approach from Observe to block hover using **Taught RBF Joint Model (`hover_joint_model_record.json`)** with **Distance-Adaptive S-Curve & Wrist Camera Elevation** (`val -= wrist_bump * sin(pi*s)`).
+  - Teleoperated pick-and-place into target slot, followed by automatic shortest-path return to Observe pose after each block.
+  - Script: `project/scripts/robot/run_hybrid_5blocks_onetake_v3_record.sh`
+  - Python: `python -m lerobot.grad_project.recording.hybrid_record_5blocks_onetake_v3`
+- Use end-to-end SmolVLA recording for a complete single-block pick/place or stack demonstration.
+- Use `teleop_before_episode=true` for an offline recovery demonstration that begins from a model-created failure state.
 - Use `hybrid_record_grasp_zone.py` only for the historical short-grasp design.
-- Use `hybrid_record_color_sequence.py` only when the requested experiment
-  explicitly uses the legacy OpenCV/FSM sequence.
-- Do not call offline recovery recording “online HIL.” Online intervention
-  logging is not implemented in the current inference loop.
+- Use `hybrid_record_color_sequence.py` only when the requested experiment explicitly uses the legacy OpenCV/FSM sequence.
+- Do not call offline recovery recording “online HIL.” Online intervention logging is not implemented in the current inference loop.
+
+## Calibration & Kinematic Mapping Stack
+
+### 1. Top Camera 34-Point Ruler Homography & Distance Calibration
+- File: `project/config/grasp_pixel_to_robot_record.json`
+- Backup samples: `project/config/ruler_calibration_samples_record.json`
+- Maps top camera pixel $(cx, cy) \to$ real-world Cartesian $(X, Y\text{ m})$ and distance $R = \sqrt{X^2 + Y^2}$, azimuth $\theta = \text{atan2}(Y, X)$.
+- Fitted with 34 physical ruler grid points across $X \in [0, 35]\text{cm}, Y \in [-30, +30]\text{cm}$.
+- Mean residual error: $2.03\text{ mm}$, Max error: $4.36\text{ mm}$.
+- Live monitor: `python project/scripts/tools/test_yolo_live.py`
+
+### 2. 45-Point 2-Step Teleoperation Demonstration Joint Mapping (RBF Model)
+- Tool: `project/scripts/tools/teach_block_hover_joints.py`
+- Samples file: `project/config/hover_demonstration_samples_record.json`
+- Model file: `project/config/hover_joint_model_record.json`
+- **2-Step Workflow**:
+  - `[Step 1: Snapshot]`: Captures unoccluded block pixel $(cx, cy) \to (X, Y)$ using top camera while robot arm is parked behind.
+  - `[Step 2: Teach]`: Demonstrator teleoperates follower to hover above the block. Current 6 motor joint positions are paired with Step 1 coordinates.
+- **RBF Multiquadric Interpolator**:
+  - Centers: 45 $(X, Y)$ points across 9 directions $\times$ 5 distances ($R \in [11, 38]\text{cm}$).
+  - Overall Mean Joint Error: **$0.22^\circ$** (`shoulder_pan`: $0.04^\circ$, `shoulder_lift`: $0.34^\circ$, `elbow_flex`: $0.41^\circ$, `wrist_flex`: $0.15^\circ$, `wrist_roll`: $0.16^\circ$).
+  - Evaluated in real-time by `TargetHoverResolver` in recorder v3.
+
+### 3. Distance-Adaptive Wrist Camera Elevation & Smooth S-Curve Trajectory
+- Observe to Hover transition uses direct Cosine S-curve easing (`apex_pose = None`).
+- Distance-adaptive wrist lift bump: $\text{wrist\_bump} = 10.0^\circ + 12.0^\circ \times \text{clip}((R - 0.12) / 0.25, 0, 1)$ ($+10^\circ$ near $\to +22^\circ$ far).
+- Wrist flex elevation formula: `cmd["wrist_flex.pos"] = base_val - wrist_bump * sin(pi * s)` (negative flex tilts wrist UP towards sky/horizon, keeping block in full wrist camera view during approach).
+
+### 4. Leader Arm Wrist Roll Center Calibration
+- Config: `project/config/calibration/teleoperators/so_leader/leader.json` & active HF cache.
+- `shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `gripper`: `range_min: 0, range_max: 4095`.
+- `wrist_roll`: `range_min: 2200, range_max: 4000` (Center $\text{mid} = 3100$, $\pm 900$).
 
 ## Plan before connecting hardware
 
