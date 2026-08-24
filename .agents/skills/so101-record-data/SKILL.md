@@ -54,7 +54,7 @@ Read `dataset-model-registry.md` when extending or merging an existing dataset.
 
 ### 3. Distance-Adaptive Wrist Camera Elevation & Smooth S-Curve Trajectory
 - Observe to Hover transition uses direct Cosine S-curve easing (`apex_pose = None`).
-- Distance-adaptive wrist lift bump: $\text{wrist\_bump} = 10.0^\circ + 12.0^\circ \times \text{clip}((R - 0.12) / 0.25, 0, 1)$ ($+10^\circ$ near $\to +22^\circ$ far).
+- Distance-adaptive wrist lift bump: $\text{wrist\_bump} = 6.0^\circ + 8.0^\circ \times \text{clip}((R - 0.12) / 0.25, 0, 1)$ ($+6^\circ$ near $\to +14^\circ$ far).
 - Wrist flex elevation formula: `cmd["wrist_flex.pos"] = base_val - wrist_bump * sin(pi * s)` (negative flex tilts wrist UP towards sky/horizon, keeping block in full wrist camera view during approach).
 
 ### 4. Leader Arm Wrist Roll Center Calibration

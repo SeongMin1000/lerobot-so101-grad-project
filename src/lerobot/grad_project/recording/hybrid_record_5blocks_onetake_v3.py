@@ -898,9 +898,9 @@ def _record_one_take_5blocks_episode(
                 t_xyz, _ = resolver._cached_block_coords[color.lower()]
                 radius = float(np.hypot(t_xyz[0], t_xyz[1]))
 
-            # Distance-adaptive wrist lift: near (R=12cm) -> +10°, far (R=37cm) -> +22°
+            # Distance-adaptive wrist lift: near (R=12cm) -> +6°, far (R=37cm) -> +14°
             dist_norm = float(np.clip((radius - 0.12) / 0.25, 0.0, 1.0))
-            wrist_bump = 10.0 + 12.0 * dist_norm
+            wrist_bump = 6.0 + 8.0 * dist_norm
 
             total_dur = cfg.macro_goto_duration_s
             print(f"🤖 [AUTO] Direct smooth transition to {color} hover pose ({total_dur:.1f}s, R={radius*100:.1f}cm, mid-flight wrist lift +{wrist_bump:.1f}°)...")
