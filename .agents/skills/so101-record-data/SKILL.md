@@ -52,8 +52,9 @@ Read `dataset-model-registry.md` when extending or merging an existing dataset.
   - Overall Mean Joint Error: **$0.22^\circ$** (`shoulder_pan`: $0.04^\circ$, `shoulder_lift`: $0.34^\circ$, `elbow_flex`: $0.41^\circ$, `wrist_flex`: $0.15^\circ$, `wrist_roll`: $0.16^\circ$).
   - Evaluated in real-time by `TargetHoverResolver` in recorder v3.
 
-### 3. Distance-Adaptive Wrist Camera Elevation & Smooth S-Curve Trajectory
+### 3. Distance-Adaptive Wrist Camera Elevation & Earlier Pan Alignment
 - Observe to Hover transition uses direct Cosine S-curve easing (`apex_pose = None`).
+- **Earlier Direction Alignment (`shoulder_pan`)**: $\text{pan\_ratio} = 0.90 - 0.15 \times \text{clip}((R - 0.12) / 0.25, 0, 1)$ (completes pan alignment at $75\%\sim 90\%$ of total flight time while arm smoothly continues final descent).
 - Distance-adaptive wrist lift bump: $\text{wrist\_bump} = 6.0^\circ + 8.0^\circ \times \text{clip}((R - 0.12) / 0.25, 0, 1)$ ($+6^\circ$ near $\to +14^\circ$ far).
 - Wrist flex elevation formula: `cmd["wrist_flex.pos"] = base_val - wrist_bump * sin(pi * s)` (negative flex tilts wrist UP towards sky/horizon, keeping block in full wrist camera view during approach).
 

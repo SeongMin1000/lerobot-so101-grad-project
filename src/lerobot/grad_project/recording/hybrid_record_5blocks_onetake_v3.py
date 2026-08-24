@@ -652,6 +652,7 @@ def compute_clamped_cubic_spline_cmd(
     total_t: float,
     apex_ratio: float = 0.30,
     wrist_pitch_bump_deg: float = 0.0,
+    pan_completion_ratio: float = 1.0,
 ) -> dict[str, float]:
     """Computes C2-continuous clamped cubic spline (or smooth cosine easing for single segment).
 
@@ -670,12 +671,22 @@ def compute_clamped_cubic_spline_cmd(
 
     if apex_pose is None:
         # Smooth S-curve (Cosine easing) for single-segment transitions
-        s = 0.5 * (1.0 - math.cos(math.pi * (t_clamped / total_t)))
+        s_general = 0.5 * (1.0 - math.cos(math.pi * (t_clamped / total_t)))
+
+        # Earlier completion profile for shoulder_pan (aligns direction at pan_completion_ratio * total_t)
+        pan_ratio = max(0.4, min(1.0, pan_completion_ratio))
+        t_pan_total = pan_ratio * total_t
+        if t_clamped <= t_pan_total:
+            s_pan = 0.5 * (1.0 - math.cos(math.pi * (t_clamped / t_pan_total)))
+        else:
+            s_pan = 1.0
+
         for k in keys:
+            s = s_pan if "shoulder_pan" in k else s_general
             val = (1.0 - s) * float(start_pose[k]) + s * float(target_pose[k])
             # Dynamic mid-flight wrist camera elevation for clear target visibility (negative flex = pitch up towards sky)
             if "wrist_flex" in k and wrist_pitch_bump_deg > 0.0:
-                val -= wrist_pitch_bump_deg * math.sin(math.pi * s)
+                val -= wrist_pitch_bump_deg * math.sin(math.pi * s_general)
             cmd[k] = val
         return cmd
 
@@ -742,6 +753,7 @@ def _record_auto_spline_trajectory(
     events: dict[str, bool],
     apex_ratio: float = 0.30,
     wrist_pitch_bump_deg: float = 0.0,
+    pan_completion_ratio: float = 1.0,
 ) -> RecordControlEvent | None:
     """Executes a single continuous parabolic / arc spline trajectory while recording every frame."""
     steps = max(2, int(duration_s * fps))
@@ -767,6 +779,7 @@ def _record_auto_spline_trajectory(
             total_t=duration_s,
             apex_ratio=apex_ratio,
             wrist_pitch_bump_deg=wrist_pitch_bump_deg,
+            pan_completion_ratio=pan_completion_ratio,
         )
 
         # Follower executes macro
@@ -902,8 +915,11 @@ def _record_one_take_5blocks_episode(
             dist_norm = float(np.clip((radius - 0.12) / 0.25, 0.0, 1.0))
             wrist_bump = 6.0 + 8.0 * dist_norm
 
+            # Distance-adaptive earlier pan alignment: near (R=12cm) -> 90% time, far (R=37cm) -> 75% time
+            pan_ratio = 0.90 - 0.15 * dist_norm
+
             total_dur = cfg.macro_goto_duration_s
-            print(f"🤖 [AUTO] Direct smooth transition to {color} hover pose ({total_dur:.1f}s, R={radius*100:.1f}cm, mid-flight wrist lift +{wrist_bump:.1f}°)...")
+            print(f"🤖 [AUTO] Direct smooth transition to {color} hover pose ({total_dur:.1f}s, R={radius*100:.1f}cm, pan align @ {pan_ratio*100:.0f}%, mid-flight wrist lift +{wrist_bump:.1f}°)...")
             macro_res = _record_auto_spline_trajectory(
                 robot=robot,
                 teleop=teleop,
@@ -921,6 +937,7 @@ def _record_one_take_5blocks_episode(
                 display_compressed=cfg.display_compressed_images,
                 events=events,
                 wrist_pitch_bump_deg=wrist_bump,
+                pan_completion_ratio=pan_ratio,
             )
         else:
             # Subsequent blocks without observe reset: single continuous parabolic arc (lift +12cm apex -> fly to hover)
