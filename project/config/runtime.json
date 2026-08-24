@@ -6,7 +6,15 @@
       "elbow_flex.pos": 16.65934065934066,
       "wrist_flex.pos": 95.47252747252747,
       "wrist_roll.pos": -7.032967032967033,
-      "gripper.pos": 26.851851851851855
+      "gripper.pos": 45.0
+    },
+    "task_complete": {
+      "shoulder_pan.pos": -0.967032967032967,
+      "shoulder_lift.pos": -87.42857142857143,
+      "elbow_flex.pos": 16.65934065934066,
+      "wrist_flex.pos": 95.47252747252747,
+      "wrist_roll.pos": -7.032967032967033,
+      "gripper.pos": 0.0
     },
     "drop_center": {
       "shoulder_pan.pos": -7.428571428571429,

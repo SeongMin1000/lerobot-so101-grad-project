@@ -22,6 +22,7 @@ Status meanings:
 | `eslab1234/red_full_126ep` | red-only expanded spatial dataset, 126 episodes | `historical` | Basis of several LoRA comparisons |
 | `eslab1234/red_full_138ep_recovery_v1` | 126 episodes plus recovery demonstrations, 138 total | `active` | Current red-policy dataset snapshot |
 | `eslab1234/pick_and_place_20260704_merged_v1_smolvla_task_v1` | ACT-era data relabeled/converted for SmolVLA task text | `candidate`, `verify` | Inspect actual episode tasks and camera keys before training |
+| `eslab1234/task1_hybrid_5blocks_v3_100ep_merged` | Task 1 5-block one-take recording (v3), 100 episodes, 138k frames | `active` | 5 sessions merged, RBF hover + distance S-curve + complete pose (gripper closed) |
 
 Never merge merely because IDs look compatible. Verify FPS, robot type,
 feature keys, action/state shapes, camera orientation, task semantics, and
