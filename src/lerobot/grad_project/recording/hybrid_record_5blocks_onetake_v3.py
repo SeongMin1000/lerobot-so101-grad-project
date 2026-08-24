@@ -999,13 +999,19 @@ def _record_one_take_5blocks_episode(
             cur_robot, _ = _read_current_poses(robot, teleop)
             total_dur = cfg.macro_return_duration_s
 
-            print(f"🤖 [AUTO] Direct return to observe pose ({total_dur:.1f}s)...")
+            # Last block returns to Observe pose while smoothly closing gripper (0.0) as task completion signal
+            complete_target = observe_target.copy()
+            complete_target["gripper.pos"] = 0.0
+            target_return_pose = complete_target if is_last_block else observe_target
+            ret_label = "task complete pose (Gripper Closed)" if is_last_block else "observe pose (Gripper Open)"
+
+            print(f"🤖 [AUTO] Direct return to {ret_label} ({total_dur:.1f}s)...")
             ret_res = _record_auto_spline_trajectory(
                 robot=robot,
                 teleop=teleop,
                 start_robot_pose=cur_robot,
                 apex_pose=None,
-                target_pose=observe_target,
+                target_pose=target_return_pose,
                 duration_s=total_dur,
                 fps=fps,
                 dataset=dataset,
@@ -1021,15 +1027,17 @@ def _record_one_take_5blocks_episode(
                 return ret_res
 
     # Completed all 5 blocks!
+    # Frame recording stops immediately as soon as complete_target is reached (0 extra idle frames recorded!)
     log_say("All 5 blocks completed", cfg.play_sounds)
     print("\n" + "=" * 78)
-    print("✅ [5 BLOCKS COMPLETE] Press [→ Right Arrow] to SAVE or [← Left Arrow] to DISCARD.")
+    print("✅ [5 BLOCKS COMPLETE] Task complete pose reached (Gripper Closed).")
+    print("🛑 Frame recording finished. Waiting for operator confirmation:")
+    print("👉 Press [→ Right Arrow] to SAVE or [← Left Arrow] to DISCARD.")
     print("=" * 78)
 
-    # Wait for final save/discard confirmation while holding observe pose
+    # Wait for final save/discard confirmation WITHOUT recording extra frames
     events["exit_early"] = False
     events["rerecord_episode"] = False
-    dt = 1.0 / fps
 
     while True:
         if events["stop_recording"]:
@@ -1039,16 +1047,7 @@ def _record_one_take_5blocks_episode(
         if events["exit_early"]:
             return RecordControlEvent.SAVE
 
-        start_loop_t = time.perf_counter()
-        obs = robot.get_observation()
-        proc_obs = robot_obs_proc(obs)
-        obs_frame = build_dataset_frame(dataset.features, proc_obs, prefix=OBS_STR)
-        proc_act = teleop_act_proc((observe_target, obs))
-        act_frame = build_dataset_frame(dataset.features, proc_act, prefix=ACTION)
-        dataset.add_frame({**obs_frame, **act_frame, "task": single_task})
-
-        elapsed = time.perf_counter() - start_loop_t
-        precise_sleep(max(dt - elapsed, 0.0))
+        precise_sleep(0.05)
 
 
 def _wait_for_scene_ready(
