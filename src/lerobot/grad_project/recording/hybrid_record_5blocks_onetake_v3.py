@@ -144,8 +144,8 @@ class HybridOneTakeRecordConfig(LeRobotRecordConfig):
     wait_enter_before_episode: bool = True
 
     # Distance-adaptive direction compensation (positive shifts left to correct rightward drift)
-    pan_bias_near_deg: float = 0.5   # near zone (R <= 12cm)
-    pan_bias_far_deg: float = 2.5    # far zone (R >= 37cm)
+    pan_bias_near_deg: float = 1.0   # near zone (R <= 12cm)
+    pan_bias_far_deg: float = 4.0    # far zone (R >= 37cm)
 
 
 class RecordControlEvent(str, Enum):
