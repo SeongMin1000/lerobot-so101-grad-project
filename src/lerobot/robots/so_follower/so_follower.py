@@ -224,13 +224,11 @@ class SOFollower(Robot):
                 self.bus.write("D_Coefficient", motor, 32)
 
                 if motor == "gripper":
-                    # gripper_close_value targets the fully-closed position, so a
-                    # held block never lets the servo reach it -- it pushes at
-                    # this cap continuously for as long as the grasp is held,
-                    # not just on contact. 50% was still enough to shatter a
-                    # printed jaw, so this caps it well below that.
-                    self.bus.write("Max_Torque_Limit", motor, 200)  # 20% of max torque
-                    self.bus.write("Protection_Current", motor, 100)  # 20% of max current
+                    # Same limits as the arm joints. These were dropped to 20%
+                    # after a printed jaw broke, but the break came from the
+                    # jaws being driven into the table -- guarded separately
+                    # now -- and the lower cap slows the gripper enough to be
+                    # obvious under teleoperation.
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
     def setup_motors(self) -> None:
@@ -281,7 +279,7 @@ class SOFollower(Robot):
         # than clipping each joint independently from its measured position.
         # A tracking watchdog stops every joint if one motor cannot keep up.
         if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
+            present_pos = self.bus.sync_read("Present_Position", num_retry=2)
             commanded_motors = set(goal_pos)
 
             if self._last_goal_pos is None or set(self._last_goal_pos) != commanded_motors:
