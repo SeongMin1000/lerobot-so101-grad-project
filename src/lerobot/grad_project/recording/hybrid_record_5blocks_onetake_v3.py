@@ -917,28 +917,65 @@ def _record_one_take_5blocks_episode(
         # Distance-adaptive earlier pan alignment: near (R=12cm) -> 90% time, far (R=37cm) -> 75% time
         pan_ratio = 0.90 - 0.15 * dist_norm
 
-        total_dur = cfg.macro_goto_duration_s
-        from_label = "observe pose" if (block_idx == 0 or cfg.return_to_observe_each_block) else "previous slot"
-        print(f"🤖 [AUTO] Direct smooth transition from {from_label} to {color} hover pose ({total_dur:.1f}s, R={radius*100:.1f}cm, pan align @ {pan_ratio*100:.0f}%, mid-flight wrist lift +{wrist_bump:.1f}°)...")
-        macro_res = _record_auto_spline_trajectory(
-            robot=robot,
-            teleop=teleop,
-            start_robot_pose=cur_robot,
-            apex_pose=None,
-            target_pose=hover_target,
-            duration_s=total_dur,
-            fps=fps,
-            dataset=dataset,
-            single_task=single_task,
-            robot_obs_proc=robot_obs_proc,
-            teleop_act_proc=teleop_act_proc,
-            robot_act_proc=robot_act_proc,
-            display_data=cfg.display_data,
-            display_compressed=cfg.display_compressed_images,
-            events=events,
-            wrist_pitch_bump_deg=wrist_bump,
-            pan_completion_ratio=pan_ratio,
-        )
+        is_direct_slot_transit = (block_idx > 0 and not cfg.return_to_observe_each_block)
+
+        if is_direct_slot_transit:
+            # 1. Lift vertically above the slot first to safely clear obstacles without sideways swing
+            lift_apex_pose = cur_robot.copy()
+            # Keep slot's exact shoulder_pan so it lifts purely upwards first
+            lift_apex_pose["shoulder_pan.pos"] = cur_robot.get("shoulder_pan.pos", 0.0)
+            # Raise shoulder up (negative degrees is up on SO-101) by 22 degrees
+            lift_apex_pose["shoulder_lift.pos"] = cur_robot.get("shoulder_lift.pos", -40.0) - 22.0
+            # Gently adjust wrist and open gripper
+            lift_apex_pose["wrist_flex.pos"] = max(20.0, cur_robot.get("wrist_flex.pos", 60.0) - 10.0)
+            lift_apex_pose["gripper.pos"] = 45.0
+
+            lift_dur = 0.6
+            transit_dur = cfg.macro_goto_duration_s
+            total_dur = lift_dur + transit_dur
+            apex_ratio = lift_dur / total_dur  # ~0.23
+
+            print(f"🤖 [AUTO] Vertical lift from slot ({lift_dur:.1f}s) + flight to {color} hover pose ({transit_dur:.1f}s, total={total_dur:.1f}s)...")
+            macro_res = _record_auto_spline_trajectory(
+                robot=robot,
+                teleop=teleop,
+                start_robot_pose=cur_robot,
+                apex_pose=lift_apex_pose,
+                target_pose=hover_target,
+                duration_s=total_dur,
+                fps=fps,
+                dataset=dataset,
+                single_task=single_task,
+                robot_obs_proc=robot_obs_proc,
+                teleop_act_proc=teleop_act_proc,
+                robot_act_proc=robot_act_proc,
+                display_data=cfg.display_data,
+                display_compressed=cfg.display_compressed_images,
+                events=events,
+                apex_ratio=apex_ratio,
+            )
+        else:
+            total_dur = cfg.macro_goto_duration_s
+            print(f"🤖 [AUTO] Direct smooth transition from observe pose to {color} hover pose ({total_dur:.1f}s, R={radius*100:.1f}cm, pan align @ {pan_ratio*100:.0f}%, mid-flight wrist lift +{wrist_bump:.1f}°)...")
+            macro_res = _record_auto_spline_trajectory(
+                robot=robot,
+                teleop=teleop,
+                start_robot_pose=cur_robot,
+                apex_pose=None,
+                target_pose=hover_target,
+                duration_s=total_dur,
+                fps=fps,
+                dataset=dataset,
+                single_task=single_task,
+                robot_obs_proc=robot_obs_proc,
+                teleop_act_proc=teleop_act_proc,
+                robot_act_proc=robot_act_proc,
+                display_data=cfg.display_data,
+                display_compressed=cfg.display_compressed_images,
+                events=events,
+                wrist_pitch_bump_deg=wrist_bump,
+                pan_completion_ratio=pan_ratio,
+            )
 
         if macro_res is not None:
             return macro_res
