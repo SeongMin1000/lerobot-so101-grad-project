@@ -143,6 +143,10 @@ class HybridOneTakeRecordConfig(LeRobotRecordConfig):
     return_to_observe_each_block: bool = True
     wait_enter_before_episode: bool = True
 
+    # Distance-adaptive direction compensation (positive shifts left to correct rightward drift)
+    pan_bias_near_deg: float = 0.5   # near zone (R <= 12cm)
+    pan_bias_far_deg: float = 2.5    # far zone (R >= 37cm)
+
 
 class RecordControlEvent(str, Enum):
     SAVE = "save"
@@ -487,14 +491,24 @@ class TargetHoverResolver:
                     pred_joints = feat @ weights  # (1, 5)
 
                 pose_hover = {f"{n}.pos": float(pred_joints[0, i]) for i, n in enumerate(names)}
+
+                # Distance-adaptive shoulder_pan direction compensation (positive shifts left to correct rightward drift)
+                radius = float(np.hypot(target_xyz[0], target_xyz[1]))
+                dist_norm = float(np.clip((radius - 0.12) / 0.25, 0.0, 1.0))
+                pan_bias = float(self.cfg.pan_bias_near_deg + (self.cfg.pan_bias_far_deg - self.cfg.pan_bias_near_deg) * dist_norm)
+                if "shoulder_pan.pos" in pose_hover:
+                    pose_hover["shoulder_pan.pos"] += pan_bias
+
                 pose_hover["gripper.pos"] = 45.0
 
                 pose_high = pose_hover.copy()
                 pose_high["shoulder_lift.pos"] = min(-10.0, pose_hover["shoulder_lift.pos"] - 15.0)
                 pose_high["wrist_flex.pos"] = max(20.0, pose_hover["wrist_flex.pos"] + 15.0)
 
-                radius = float(np.hypot(target_xyz[0], target_xyz[1]))
-                logging.info("🎯 [TAUGHT RBF MODEL] Evaluated demonstration joint model for %s at R=%.2fm", color, radius)
+                logging.info(
+                    "🎯 [TAUGHT RBF MODEL] Evaluated demonstration joint model for %s at R=%.2fm (pan_bias=+%.2f°)",
+                    color, radius, pan_bias
+                )
                 return pose_high, pose_hover
             except Exception as e:
                 logging.warning("Taught model evaluation failed for %s: %s (falling back to IK)", color, e)
