@@ -920,14 +920,16 @@ def _record_one_take_5blocks_episode(
         is_direct_slot_transit = (block_idx > 0 and not cfg.return_to_observe_each_block)
 
         if is_direct_slot_transit:
-            # 1. Lift vertically above the slot first to safely clear obstacles without sideways swing
+            # 1. Lift vertically above the slot: raise shoulder + lift elbow + curl wrist up cleanly
             lift_apex_pose = cur_robot.copy()
-            # Keep slot's exact shoulder_pan so it lifts purely upwards first
+            # Keep slot's exact shoulder_pan so it lifts purely upwards without sideways swing
             lift_apex_pose["shoulder_pan.pos"] = cur_robot.get("shoulder_pan.pos", 0.0)
-            # Raise shoulder up (negative degrees is up on SO-101) by 22 degrees
-            lift_apex_pose["shoulder_lift.pos"] = cur_robot.get("shoulder_lift.pos", -40.0) - 22.0
-            # Gently adjust wrist and open gripper
-            lift_apex_pose["wrist_flex.pos"] = max(20.0, cur_robot.get("wrist_flex.pos", 60.0) - 10.0)
+            # Raise shoulder up (negative degrees is up on SO-101) by 25 degrees
+            lift_apex_pose["shoulder_lift.pos"] = cur_robot.get("shoulder_lift.pos", -40.0) - 25.0
+            # Lift elbow up (tuck forearm higher) by 15 degrees
+            lift_apex_pose["elbow_flex.pos"] = cur_robot.get("elbow_flex.pos", 45.0) - 15.0
+            # Bend/curl wrist up (decreasing wrist_flex pitches fingers up away from slot) by 25 degrees
+            lift_apex_pose["wrist_flex.pos"] = max(20.0, cur_robot.get("wrist_flex.pos", 75.0) - 25.0)
             lift_apex_pose["gripper.pos"] = 45.0
 
             lift_dur = 0.6
