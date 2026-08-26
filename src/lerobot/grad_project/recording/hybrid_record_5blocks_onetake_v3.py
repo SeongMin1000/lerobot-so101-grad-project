@@ -143,9 +143,9 @@ class HybridOneTakeRecordConfig(LeRobotRecordConfig):
     return_to_observe_each_block: bool = True
     wait_enter_before_episode: bool = True
 
-    # Distance-adaptive direction compensation (positive shifts left to correct rightward drift)
-    pan_bias_near_deg: float = 2.0   # near zone (R <= 12cm)
-    pan_bias_far_deg: float = 6.5    # far zone (R >= 37cm)
+    # Distance-adaptive direction compensation (positive degrees shifts LEFT)
+    pan_bias_near_deg: float = 1.0   # near zone (R <= 12cm)
+    pan_bias_far_deg: float = 3.5    # far zone (R >= 37cm)
 
 
 class RecordControlEvent(str, Enum):
@@ -492,12 +492,12 @@ class TargetHoverResolver:
 
                 pose_hover = {f"{n}.pos": float(pred_joints[0, i]) for i, n in enumerate(names)}
 
-                # Distance-adaptive shoulder_pan direction compensation (positive shifts left to correct rightward drift)
+                # Distance-adaptive shoulder_pan direction compensation (subtracting shifts left on this robot)
                 radius = float(np.hypot(target_xyz[0], target_xyz[1]))
                 dist_norm = float(np.clip((radius - 0.12) / 0.25, 0.0, 1.0))
                 pan_bias = float(self.cfg.pan_bias_near_deg + (self.cfg.pan_bias_far_deg - self.cfg.pan_bias_near_deg) * dist_norm)
                 if "shoulder_pan.pos" in pose_hover:
-                    pose_hover["shoulder_pan.pos"] += pan_bias
+                    pose_hover["shoulder_pan.pos"] -= pan_bias
 
                 pose_hover["gripper.pos"] = 45.0
 
