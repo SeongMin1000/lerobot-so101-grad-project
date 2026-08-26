@@ -928,8 +928,8 @@ def _record_one_take_5blocks_episode(
             lift_apex_pose["shoulder_lift.pos"] = cur_robot.get("shoulder_lift.pos", -40.0) - 25.0
             # Lift elbow up (tuck forearm higher) by 15 degrees
             lift_apex_pose["elbow_flex.pos"] = cur_robot.get("elbow_flex.pos", 45.0) - 15.0
-            # Bend/curl wrist up (decreasing wrist_flex pitches fingers up away from slot) by 25 degrees
-            lift_apex_pose["wrist_flex.pos"] = max(20.0, cur_robot.get("wrist_flex.pos", 75.0) - 25.0)
+            # Pitch wrist DOWNWARDS (increasing degrees points fingers vertically straight down to ground)
+            lift_apex_pose["wrist_flex.pos"] = min(98.0, cur_robot.get("wrist_flex.pos", 75.0) + 20.0)
             lift_apex_pose["gripper.pos"] = 45.0
 
             lift_dur = 0.6
