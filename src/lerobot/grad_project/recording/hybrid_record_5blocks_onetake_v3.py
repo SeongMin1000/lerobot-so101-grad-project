@@ -896,76 +896,49 @@ def _record_one_take_5blocks_episode(
         print(f"\n--- [BLOCK {block_idx + 1}/{len(colors)}: {color.upper()}] ---")
 
         # -------------------------------------------------------------
-        # 1. AUTO APPROACH: Continuous Parabolic Arc Spline
+        # 1. AUTO APPROACH: Direct Smooth Real Demonstration Transition
         # -------------------------------------------------------------
         obs = robot.get_observation()
         cur_robot, cur_teleop = _read_current_poses(robot, teleop)
-        approach_high, hover_target = resolver.resolve_block_targets(color, obs, cur_robot)
+        _, hover_target = resolver.resolve_block_targets(color, obs, cur_robot)
 
         log_say(f"Approaching {color} block", cfg.play_sounds)
 
-        if block_idx == 0 or cfg.return_to_observe_each_block:
-            # Determine target radius R for distance-adaptive wrist camera elevation
-            radius = 0.25
-            if color.lower() in resolver._cached_block_coords:
-                t_xyz, _ = resolver._cached_block_coords[color.lower()]
-                radius = float(np.hypot(t_xyz[0], t_xyz[1]))
+        # Determine target radius R for distance-adaptive wrist camera elevation
+        radius = 0.25
+        if color.lower() in resolver._cached_block_coords:
+            t_xyz, _ = resolver._cached_block_coords[color.lower()]
+            radius = float(np.hypot(t_xyz[0], t_xyz[1]))
 
-            # Distance-adaptive wrist lift: near (R=12cm) -> +6°, far (R=37cm) -> +14°
-            dist_norm = float(np.clip((radius - 0.12) / 0.25, 0.0, 1.0))
-            wrist_bump = 6.0 + 8.0 * dist_norm
+        # Distance-adaptive wrist lift: near (R=12cm) -> +6°, far (R=37cm) -> +14°
+        dist_norm = float(np.clip((radius - 0.12) / 0.25, 0.0, 1.0))
+        wrist_bump = 6.0 + 8.0 * dist_norm
 
-            # Distance-adaptive earlier pan alignment: near (R=12cm) -> 90% time, far (R=37cm) -> 75% time
-            pan_ratio = 0.90 - 0.15 * dist_norm
+        # Distance-adaptive earlier pan alignment: near (R=12cm) -> 90% time, far (R=37cm) -> 75% time
+        pan_ratio = 0.90 - 0.15 * dist_norm
 
-            total_dur = cfg.macro_goto_duration_s
-            print(f"🤖 [AUTO] Direct smooth transition to {color} hover pose ({total_dur:.1f}s, R={radius*100:.1f}cm, pan align @ {pan_ratio*100:.0f}%, mid-flight wrist lift +{wrist_bump:.1f}°)...")
-            macro_res = _record_auto_spline_trajectory(
-                robot=robot,
-                teleop=teleop,
-                start_robot_pose=cur_robot,
-                apex_pose=None,
-                target_pose=hover_target,
-                duration_s=total_dur,
-                fps=fps,
-                dataset=dataset,
-                single_task=single_task,
-                robot_obs_proc=robot_obs_proc,
-                teleop_act_proc=teleop_act_proc,
-                robot_act_proc=robot_act_proc,
-                display_data=cfg.display_data,
-                display_compressed=cfg.display_compressed_images,
-                events=events,
-                wrist_pitch_bump_deg=wrist_bump,
-                pan_completion_ratio=pan_ratio,
-            )
-        else:
-            # Subsequent blocks without observe reset: single continuous parabolic arc (lift +12cm apex -> fly to hover)
-            clear_pose = resolver.resolve_lift_clear_pose(cur_robot)
-            lift_time = 0.6
-            transit_time = cfg.macro_goto_duration_s
-            total_dur = lift_time + transit_time
-            apex_ratio = lift_time / total_dur  # e.g. 0.6 / 2.6 ~ 0.23
-
-            print(f"🤖 [AUTO] Parabolic Arc flight to {color} hover pose ({total_dur:.1f}s, apex @ +12cm)...")
-            macro_res = _record_auto_spline_trajectory(
-                robot=robot,
-                teleop=teleop,
-                start_robot_pose=cur_robot,
-                apex_pose=clear_pose,
-                target_pose=approach_high,
-                duration_s=total_dur,
-                fps=fps,
-                dataset=dataset,
-                single_task=single_task,
-                robot_obs_proc=robot_obs_proc,
-                teleop_act_proc=teleop_act_proc,
-                robot_act_proc=robot_act_proc,
-                display_data=cfg.display_data,
-                display_compressed=cfg.display_compressed_images,
-                events=events,
-                apex_ratio=apex_ratio,
-            )
+        total_dur = cfg.macro_goto_duration_s
+        from_label = "observe pose" if (block_idx == 0 or cfg.return_to_observe_each_block) else "previous slot"
+        print(f"🤖 [AUTO] Direct smooth transition from {from_label} to {color} hover pose ({total_dur:.1f}s, R={radius*100:.1f}cm, pan align @ {pan_ratio*100:.0f}%, mid-flight wrist lift +{wrist_bump:.1f}°)...")
+        macro_res = _record_auto_spline_trajectory(
+            robot=robot,
+            teleop=teleop,
+            start_robot_pose=cur_robot,
+            apex_pose=None,
+            target_pose=hover_target,
+            duration_s=total_dur,
+            fps=fps,
+            dataset=dataset,
+            single_task=single_task,
+            robot_obs_proc=robot_obs_proc,
+            teleop_act_proc=teleop_act_proc,
+            robot_act_proc=robot_act_proc,
+            display_data=cfg.display_data,
+            display_compressed=cfg.display_compressed_images,
+            events=events,
+            wrist_pitch_bump_deg=wrist_bump,
+            pan_completion_ratio=pan_ratio,
+        )
 
         if macro_res is not None:
             return macro_res
