@@ -143,7 +143,8 @@ class HybridOneTakeRecordConfig(LeRobotRecordConfig):
     return_to_observe_each_block: bool = True
     wait_enter_before_episode: bool = True
 
-    # Distance-adaptive direction compensation (positive degrees shifts LEFT)
+    # Distance-adaptive direction compensation ("right", "left", or "none")
+    pan_bias_direction: str = "right"
     pan_bias_near_deg: float = 1.0   # near zone (R <= 12cm)
     pan_bias_far_deg: float = 3.5    # far zone (R >= 37cm)
 
@@ -492,12 +493,23 @@ class TargetHoverResolver:
 
                 pose_hover = {f"{n}.pos": float(pred_joints[0, i]) for i, n in enumerate(names)}
 
-                # Distance-adaptive shoulder_pan direction compensation (subtracting shifts left on this robot)
+                # Distance-adaptive shoulder_pan direction compensation ("right" adds, "left" subtracts)
                 radius = float(np.hypot(target_xyz[0], target_xyz[1]))
                 dist_norm = float(np.clip((radius - 0.12) / 0.25, 0.0, 1.0))
-                pan_bias = float(self.cfg.pan_bias_near_deg + (self.cfg.pan_bias_far_deg - self.cfg.pan_bias_near_deg) * dist_norm)
+                mag = float(self.cfg.pan_bias_near_deg + (self.cfg.pan_bias_far_deg - self.cfg.pan_bias_near_deg) * dist_norm)
+                dir_lower = str(self.cfg.pan_bias_direction).strip().lower()
+                if dir_lower in {"right", "r", "우", "우측"}:
+                    pan_bias = +mag
+                    dir_tag = f"RIGHT +{mag:.2f}°"
+                elif dir_lower in {"left", "l", "좌", "좌측"}:
+                    pan_bias = -mag
+                    dir_tag = f"LEFT -{mag:.2f}°"
+                else:
+                    pan_bias = 0.0
+                    dir_tag = "OFF"
+
                 if "shoulder_pan.pos" in pose_hover:
-                    pose_hover["shoulder_pan.pos"] -= pan_bias
+                    pose_hover["shoulder_pan.pos"] += pan_bias
 
                 pose_hover["gripper.pos"] = 45.0
 
@@ -506,8 +518,8 @@ class TargetHoverResolver:
                 pose_high["wrist_flex.pos"] = max(20.0, pose_hover["wrist_flex.pos"] + 15.0)
 
                 logging.info(
-                    "🎯 [TAUGHT RBF MODEL] Evaluated demonstration joint model for %s at R=%.2fm (pan_bias=+%.2f°)",
-                    color, radius, pan_bias
+                    "🎯 [TAUGHT RBF MODEL] Evaluated demonstration joint model for %s at R=%.2fm (pan_bias=%s)",
+                    color, radius, dir_tag
                 )
                 return pose_high, pose_hover
             except Exception as e:
