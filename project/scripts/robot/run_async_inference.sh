@@ -21,10 +21,36 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LEROBOT_ROOT="${LEROBOT_ROOT:-$(cd -- "$SCRIPT_DIR/../../.." && pwd)}"
 
-# Source active profile if present
+# Preserve user-provided CLI variables so they are not overwritten by active.env
+CLI_MODEL_PATH="${MODEL_PATH:-}"
+CLI_POLICY_TYPE="${POLICY_TYPE:-}"
+CLI_TASK="${TASK:-}"
+CLI_ACTIONS_PER_CHUNK="${ACTIONS_PER_CHUNK:-}"
+CLI_CHUNK_SIZE_THRESHOLD="${CHUNK_SIZE_THRESHOLD:-}"
+CLI_AGGREGATE_FN_NAME="${AGGREGATE_FN_NAME:-}"
+CLI_MAX_RELATIVE_TARGET="${MAX_RELATIVE_TARGET:-}"
+CLI_MAX_TRACKING_ERROR="${MAX_TRACKING_ERROR:-}"
+CLI_TRACKING_ERROR_GRACE_STEPS="${TRACKING_ERROR_GRACE_STEPS:-}"
+CLI_SERVER_ADDRESS="${SERVER_ADDRESS:-}"
+CLI_CAMERA_KEY_MODE="${CAMERA_KEY_MODE:-}"
+
+# Source active profile if present (only for fallbacks)
 if [[ -f "$LEROBOT_ROOT/project/config/experiment-profiles/active.env" ]]; then
   source "$LEROBOT_ROOT/project/config/experiment-profiles/active.env"
 fi
+
+# Re-apply CLI variables if the user provided them explicitly
+[[ -n "$CLI_MODEL_PATH" ]] && MODEL_PATH="$CLI_MODEL_PATH"
+[[ -n "$CLI_POLICY_TYPE" ]] && POLICY_TYPE="$CLI_POLICY_TYPE"
+[[ -n "$CLI_TASK" ]] && TASK="$CLI_TASK"
+[[ -n "$CLI_ACTIONS_PER_CHUNK" ]] && ACTIONS_PER_CHUNK="$CLI_ACTIONS_PER_CHUNK"
+[[ -n "$CLI_CHUNK_SIZE_THRESHOLD" ]] && CHUNK_SIZE_THRESHOLD="$CLI_CHUNK_SIZE_THRESHOLD"
+[[ -n "$CLI_AGGREGATE_FN_NAME" ]] && AGGREGATE_FN_NAME="$CLI_AGGREGATE_FN_NAME"
+[[ -n "$CLI_MAX_RELATIVE_TARGET" ]] && MAX_RELATIVE_TARGET="$CLI_MAX_RELATIVE_TARGET"
+[[ -n "$CLI_MAX_TRACKING_ERROR" ]] && MAX_TRACKING_ERROR="$CLI_MAX_TRACKING_ERROR"
+[[ -n "$CLI_TRACKING_ERROR_GRACE_STEPS" ]] && TRACKING_ERROR_GRACE_STEPS="$CLI_TRACKING_ERROR_GRACE_STEPS"
+[[ -n "$CLI_SERVER_ADDRESS" ]] && SERVER_ADDRESS="$CLI_SERVER_ADDRESS"
+[[ -n "$CLI_CAMERA_KEY_MODE" ]] && CAMERA_KEY_MODE="$CLI_CAMERA_KEY_MODE"
 
 # Locate Python environment
 if [[ -x "$HOME/miniforge3/envs/lerobot/bin/python" ]]; then
