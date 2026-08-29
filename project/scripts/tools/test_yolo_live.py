@@ -63,7 +63,7 @@ def main():
         print(f"[ERROR] Failed to open camera at {cam_path}")
         sys.exit(1)
 
-    output_snapshot = root / "yolo_live_snapshot.jpg"
+    output_snapshot = root / "var/yolo_live_snapshot.jpg"
     print("=" * 60)
     print("🎥 Live YOLO Detection & Robot Coordinate Monitor Started!")
     print(f"📸 Snapshot will be saved to: {output_snapshot}")

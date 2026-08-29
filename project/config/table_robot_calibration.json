@@ -1,61 +1,71 @@
 {
   "affine_table_cm_to_robot_m": [
     [
-      -0.05744669539749461,
-      0.8858009298523839,
-      0.23311144676470302
+      -0.05087252266747825,
+      1.0812561398131812,
+      0.2490212238038778
     ],
     [
-      0.9410166862447603,
-      0.06370524703637541,
-      -0.08271273629227424
+      1.108353287739449,
+      -0.10646712235070246,
+      -0.1018906685796465
     ],
     [
-      0.0003649953493459107,
-      0.10466378107153755,
-      0.002474855618618585
+      0.002286624220538411,
+      0.12614125464458623,
+      0.004194286613110818
     ]
   ],
-  "note": "robot_xyz_m = M @ [x_cm/100, y_cm/100, 1]. Fit from physically measured correspondence points below; re-run the calibration wizard if the camera mount, table, or robot base is moved.",
+  "note": "robot_xyz_m = M @ [x_cm/100, y_cm/100, 1]. Refit 2026-08-27 from tcp_offset_probe.py results: robot was sent to the ORIGINAL calibration's predicted robot_xyz for each labelled point, then a human measured where the gripper ACTUALLY landed on the table (pencil mark + ruler, origin = tl corner). source_points below use that measured table position paired with the robot_xyz that was actually sent, so this fit absorbs the real TCP/orientation error empirically without needing to know its exact cause. Re-run the calibration wizard (or tcp_offset_probe.py again) if the camera mount, table, or robot base is moved.",
   "source_points": [
     {
-      "label": "tl",
-      "table_x_cm": 0.0,
-      "table_y_cm": 0.0,
+      "label": "center",
+      "table_x_cm": 11.0,
+      "table_y_cm": 2.5,
       "robot_xyz_m": [
-        0.23310741862515766,
-        -0.0850019391099649,
-        0.0025651972174051824
+        0.2717,
+        0.0146,
+        0.0077
+      ]
+    },
+    {
+      "label": "tl",
+      "table_x_cm": 2.0,
+      "table_y_cm": -1.5,
+      "robot_xyz_m": [
+        0.2331,
+        -0.0827,
+        0.0025
       ]
     },
     {
       "label": "tr",
-      "table_x_cm": 20.0,
-      "table_y_cm": 0.0,
+      "table_x_cm": 18.0,
+      "table_y_cm": -1.5,
       "robot_xyz_m": [
-        0.22162613582474988,
-        0.10777980377436845,
-        0.002457513089701213
+        0.2216,
+        0.1055,
+        0.0025
       ]
     },
     {
       "label": "br",
-      "table_x_cm": 20.0,
-      "table_y_cm": 10.0,
+      "table_x_cm": 20.3,
+      "table_y_cm": 6.5,
       "robot_xyz_m": [
-        0.3101981725308976,
-        0.10957192284262467,
-        0.013104574394428165
+        0.3102,
+        0.1119,
+        0.013
       ]
     },
     {
       "label": "bl",
-      "table_x_cm": 0.0,
-      "table_y_cm": 10.0,
+      "table_x_cm": 2.5,
+      "table_y_cm": 7.0,
       "robot_xyz_m": [
-        0.32169556788948683,
-        -0.07405300877094594,
-        0.012850892126985744
+        0.3217,
+        -0.0763,
+        0.0129
       ]
     }
   ]

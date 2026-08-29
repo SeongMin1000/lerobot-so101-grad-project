@@ -13,6 +13,7 @@ Last synchronized: 2026-08-06
 - Use `latest_only` as the current action aggregation reference.
 - Keep physical `START` confirmation and torque enabled on graceful exit.
 - Preserve aspect ratio for SmolVLA and normalize image values exactly once.
+- Always enable W&B logging (`--wandb.enable=true --wandb.project=lerobot`) and Hugging Face Hub upload (`--policy.push_to_hub=true --policy.repo_id="${HF_USER}/${RUN_NAME}"`) by default in all training commands.
 - Keep project code separated from upstream-oriented LeRobot modules.
 
 ## Symptom-to-evidence map
@@ -33,10 +34,12 @@ Last synchronized: 2026-08-06
 | `Required path not found: /dev/cam_belly` | Occurred on 2-camera setups when script enforced 3 cameras | Robot scripts updated to make belly cam optional and support 2-camera dict (`top` + `wrist`) |
 | Training command exits on unknown args | Per-transform `tfs.*` and `--eval_freq=0` were rejected | local `lerobot-train --help`; remove unsupported copied flags |
 | Training refuses output directory | `FileExistsError` when resume was false | new run/output name or supported resume; never delete by default |
+| Resume fails with `A config_path is expected` | LeRobot 0.5.2 `--resume=true` requires explicit path to checkpoint's `train_config.json` | add `--config_path="<output_dir>/checkpoints/<step>/pretrained_model/train_config.json"` or use `--policy.pretrained_path` |
+| Pretrained fine-tuning fails with `repo_id argument missing` | Base model config had `push_to_hub: true` | specify `--policy.repo_id="<new_hub_id>"` or `--policy.push_to_hub=false` |
 | PEFT adapter config 404 | Adapter/full-checkpoint loading ambiguity | inspect Hub files and `adapter_config.json`; test load before robot run |
-| Taught hover joint model fallback to IK | `KeyError: 'shoulder_lift.pos'` due to missing `.pos` suffix in output dict | Ensure `pose_hover` uses `{f"{n}.pos": val}` keys matching action features |
 | Wrist pitches down instead of up during flight | `wrist_flex` sign inversion in motor convention | Negative bump `cmd["wrist_flex.pos"] -= bump * sin(pi*s)` lifts wrist up towards horizon |
 | Camera occlusion by robot arm during joint teaching | Arm covering block caused YOLO to detect arm parts | Use 2-step (Snapshot unoccluded -> Teach follower joints) workflow |
+| `Motor tracking error exceeded safety limit` on gripper during grasp | Physical block thickness stops gripper at ~23-25° vs 0-2° goal (~22° error); `MAX_TRACKING_ERROR=20.0` with 5 grace steps triggers false stall abort | Set `MAX_TRACKING_ERROR=35.0` and `TRACKING_ERROR_GRACE_STEPS=10` in inference profile/command |
 
 ## Preprocessing facts
 

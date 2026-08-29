@@ -1,0 +1,95 @@
+{
+  "source": "629 order-verified grasps mined from eslab1234/task1_hybrid_5blocks_v3_223ep_merged",
+  "samples": [
+    {
+      "label": "mined@13cm",
+      "reach_m": 0.13151871602817622,
+      "tilt_from_vertical_deg": 5.516980005675333,
+      "sample_count": 28
+    },
+    {
+      "label": "mined@15cm",
+      "reach_m": 0.1538732415489394,
+      "tilt_from_vertical_deg": 8.374185436570222,
+      "sample_count": 22
+    },
+    {
+      "label": "mined@18cm",
+      "reach_m": 0.17622776706970258,
+      "tilt_from_vertical_deg": 10.352198723536542,
+      "sample_count": 39
+    },
+    {
+      "label": "mined@20cm",
+      "reach_m": 0.19858229259046575,
+      "tilt_from_vertical_deg": 13.780686214598392,
+      "sample_count": 52
+    },
+    {
+      "label": "mined@22cm",
+      "reach_m": 0.22093681811122895,
+      "tilt_from_vertical_deg": 20.90155177721685,
+      "sample_count": 45
+    },
+    {
+      "label": "mined@24cm",
+      "reach_m": 0.24329134363199212,
+      "tilt_from_vertical_deg": 19.934694990082722,
+      "sample_count": 25
+    },
+    {
+      "label": "mined@27cm",
+      "reach_m": 0.26564586915275534,
+      "tilt_from_vertical_deg": 24.59379656862145,
+      "sample_count": 35
+    },
+    {
+      "label": "mined@29cm",
+      "reach_m": 0.28800039467351846,
+      "tilt_from_vertical_deg": 27.099531876662553,
+      "sample_count": 34
+    },
+    {
+      "label": "mined@31cm",
+      "reach_m": 0.3103549201942817,
+      "tilt_from_vertical_deg": 28.24238283007859,
+      "sample_count": 52
+    },
+    {
+      "label": "mined@33cm",
+      "reach_m": 0.33270944571504485,
+      "tilt_from_vertical_deg": 33.033639010617236,
+      "sample_count": 47
+    },
+    {
+      "label": "mined@36cm",
+      "reach_m": 0.355063971235808,
+      "tilt_from_vertical_deg": 35.05530109199318,
+      "sample_count": 46
+    },
+    {
+      "label": "mined@38cm",
+      "reach_m": 0.37741849675657124,
+      "tilt_from_vertical_deg": 40.06628934762858,
+      "sample_count": 75
+    },
+    {
+      "label": "mined@40cm",
+      "reach_m": 0.39977302227733436,
+      "tilt_from_vertical_deg": 42.96754046988772,
+      "sample_count": 63
+    },
+    {
+      "label": "mined@42cm",
+      "reach_m": 0.4221275477980976,
+      "tilt_from_vertical_deg": 51.582846232733594,
+      "sample_count": 41
+    },
+    {
+      "label": "mined@44cm",
+      "reach_m": 0.4444820733188608,
+      "tilt_from_vertical_deg": 58.44013457128615,
+      "sample_count": 24
+    }
+  ]
+}

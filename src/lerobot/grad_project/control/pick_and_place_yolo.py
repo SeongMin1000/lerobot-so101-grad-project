@@ -28,6 +28,7 @@ Example:
 
 import json
 import logging
+from contextlib import contextmanager
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,6 +99,13 @@ class PickAndPlaceYoloConfig:
     # Preferred when present: it is fitted from real grasps at block height,
     # so it already contains the parallax the table-plane model cannot see.
     grasp_calibration: str = "project/config/grasp_pixel_to_robot.json"
+    # Tilt-vs-reach source. Prefer the bulk file (1022 real grasp moments mined
+    # from a 223-episode teleop dataset) over the dozen points hand-taught
+    # in one sitting: those swung +/-20mm and skewed near-vertical because the
+    # operator was taught to favour vertical, not because vertical was
+    # actually what worked at every distance -- the bulk data shows tilt
+    # climbing smoothly from ~6deg at 13cm to >50deg past 40cm.
+    grasp_pitch_samples: str = "project/config/grasp_pitch_bulk_samples.json"
     urdf_path: str = DEFAULT_URDF_PATH
 
     top_key: str = "top"
@@ -146,6 +154,16 @@ class PickAndPlaceYoloConfig:
     # than that trips the tracking watchdog mid-move. Durations are stretched
     # so no joint is ever asked to exceed this.
     max_joint_speed_deg_s: float = 75.0
+    # The unfold from the folded observe pose out to a far block swings the
+    # shoulder through ~90deg; at the full 75deg/s that is a lunge with real
+    # momentum behind it. Only the big approach move is slowed -- everything
+    # after it is short and stays at full speed.
+    approach_max_speed_deg_s: float = 40.0
+
+    # Height guard (see send_action). Nothing outside a declared descent may
+    # command the tip below this; descents lower it to descent_z_floor_m.
+    tip_z_floor_m: float = 0.040
+    descent_z_floor_m: float = -0.005
 
     # Servo position gain for the five arm joints (0 = leave as configured).
     arm_p_gain: int = 32
@@ -384,7 +402,7 @@ class PickAndPlaceYolo:
         self.runtime = self._load_runtime(runtime_config_path(cfg.runtime_config))
         self._ref_joints: np.ndarray | None = None
         self._ref_orientation, self._ref_azimuth_rad = self._load_grasp_orientation_ref()
-        self._pitch_model = GraspPitchModel.load()
+        self._pitch_model = GraspPitchModel.load(cfg.grasp_pitch_samples) or GraspPitchModel.load()
         if self._pitch_model is not None:
             logger.info("Using demonstrated wrist angles: %s", self._pitch_model.describe())
         else:
@@ -400,6 +418,10 @@ class PickAndPlaceYolo:
         self.placed_count = 0
         self._queue: list = []
         self._unreachable: set[str] = set()
+        self._commanded: dict[str, float] = {}
+        self._z_floor_m: float = self.cfg.tip_z_floor_m
+        self._last_tip_z: float | None = None
+        self._slot_by_color: dict[str, int] = {}
         self._skipped_this_attempt = False
 
         logger.info("PickAndPlaceYolo ready.")
@@ -471,6 +493,22 @@ class PickAndPlaceYolo:
         )
         return plane
 
+    def expected_sag_m(self, xyz_m: np.ndarray) -> float:
+        """How far below a commanded point the arm actually settles, in metres.
+
+        One implementation on purpose: the grasp and the release both have to
+        clear the same table, and when only the grasp carried a sag allowance
+        the release pressed the carried block into the board.
+        """
+        reach = float(np.hypot(xyz_m[0], xyz_m[1]))
+        azimuth_deg = abs(float(np.degrees(np.arctan2(xyz_m[1], xyz_m[0]))))
+        sag = (
+            self.cfg.droop_base_m
+            + self.cfg.droop_per_reach_m * max(0.0, reach - 0.15)
+            + self.cfg.droop_per_azimuth_m * azimuth_deg
+        )
+        return float(np.clip(sag, 0.0, self.cfg.droop_max_m))
+
     def clamp_to_table(self, xyz: np.ndarray, label: str, sag_m: float = 0.0) -> np.ndarray:
         """Never command the jaws below the table surface.
 
@@ -528,13 +566,12 @@ class PickAndPlaceYolo:
         # where the jaws were still hitting the table. Sized off the 90th
         # percentile rather than the median: too high costs a retry, too low
         # drives the jaws into the table.
-        azimuth_deg = abs(float(np.degrees(np.arctan2(target_xyz_m[1], target_xyz_m[0]))))
-        sag = (
-            self.cfg.droop_base_m
-            + self.cfg.droop_per_reach_m * max(0.0, reach - 0.15)
-            + self.cfg.droop_per_azimuth_m * azimuth_deg
-        )
-        sag = float(np.clip(sag, 0.0, self.cfg.droop_max_m))
+        # Command the mined height DIRECTLY, no sag added on top. Adding the
+        # sag estimate put the red grasp at 72mm -- above the block -- and the
+        # jaws pinched its top edge and dropped it. The mined heights already
+        # sit 30-53mm up (mid-block after real sag), so they work as-is; the
+        # sag estimate is only used to keep the floor clamp honest.
+        sag = self.expected_sag_m(target_xyz_m)
         grasp_xyz = self.clamp_to_table(
             target_xyz_m
             + np.array([0.0, 0.0, self.cfg.grasp_z_offset_m])
@@ -682,15 +719,81 @@ class PickAndPlaceYolo:
         return float(value)
 
     def send_action(self, action: dict[str, float]) -> None:
+        """Every command passes through the height guard before it reaches a servo.
+
+        This is the guarantee, not a reaction: a command that would put the
+        gripper tip below the current safety floor is refused BEFORE it is
+        sent, and the move raises instead of continuing. Planning bugs, IK
+        branch flips, interpolation arcs -- whatever produced the command, it
+        cannot reach the hardware. The floor is table+35mm everywhere except
+        inside a deliberate descent, which lowers it to just under the taught
+        grasp heights for its own duration.
+        """
+        tip_z = self._commanded_tip_z(action)
+        if tip_z is not None:
+            # Only DESCENDING below the floor is refused. Rising out of a low
+            # spot (the first ticks of a lift) and holding position down there
+            # (re-opening the jaws after a miss) are legitimate; sinking
+            # further is never.
+            descending = self._last_tip_z is not None and tip_z < self._last_tip_z - 0.001
+            if tip_z < self._z_floor_m and (descending or self._last_tip_z is None):
+                message = (
+                    f"height guard: command would drive the tip to {tip_z * 1000:.0f}mm, "
+                    f"below the {self._z_floor_m * 1000:.0f}mm floor -- refused, arm held"
+                )
+                logger.error(message)
+                raise RuntimeError(message)
+            self._last_tip_z = tip_z
+        # Remember what was COMMANDED, not what came back. The follower rate
+        # limits each new goal against its previous goal, so any interpolation
+        # that starts from a measured value disagrees with the thing doing the
+        # clamping -- see move_to_pose.
+        self._commanded = dict(action)
         if self.cfg.dry_run:
             logger.info("[DRY RUN] action: %s", {k: round(v, 2) for k, v in action.items()})
             return
         self.robot.send_action(action)
 
+    def _commanded_tip_z(self, action: dict[str, float]) -> float | None:
+        try:
+            joints = np.array([float(action[f"{n}.pos"]) for n in JOINT_ORDER])
+        except KeyError:
+            return None
+        return float(self.kin.forward_kinematics(joints)[2, 3])
+
+    @contextmanager
+    def descent_floor(self, floor_m: float):
+        """Temporarily lower the height guard for one deliberate descent."""
+        previous = self._z_floor_m
+        self._z_floor_m = floor_m
+        try:
+            yield
+        finally:
+            self._z_floor_m = previous
+
+    def commanded_gripper(self, fallback: float) -> float:
+        """Last gripper value actually sent, or `fallback` before the first send."""
+        value = (self._commanded or {}).get("gripper.pos")
+        return float(value) if value is not None else float(fallback)
+
     def move_to_pose(self, target_pose: dict[str, float], duration_s: float, name: str = "") -> None:
         current = self.get_current_pose()
         keys = [k for k in JOINT_ORDER if f"{k}.pos" in target_pose]
         keys = [f"{k}.pos" for k in keys]
+
+        # Start the gripper channel from the last COMMANDED opening rather than
+        # the measured one. A held block stalls the jaws ~26 units open while
+        # the standing goal is 0, so interpolating from the measurement asks
+        # for a 26-unit jump on the first tick. The follower clamps that to 15
+        # and -- because it rescales the whole goal vector to keep the joints
+        # coordinated -- every arm joint of that step is cut by the same factor
+        # (logged as "scaled to preserve coordination (scale=0.57)"), which is
+        # the mid-carry lurch. It also relaxes the squeeze to zero for the
+        # first half of every lift, which is how fully-seated blocks (29.0)
+        # slipped out on the way up.
+        if "gripper.pos" in current:
+            current = dict(current)
+            current["gripper.pos"] = self.commanded_gripper(current["gripper.pos"])
 
         # Stretch the ramp if any joint would have to move faster than it
         # physically can -- otherwise the goal runs away from the measured
@@ -739,7 +842,7 @@ class PickAndPlaceYolo:
         start = self.kin.forward_kinematics(joints)[:3, 3]
         distance = float(np.linalg.norm(target_xyz_m - start))
         steps = int(np.clip(round(distance / self.cfg.straight_step_m), 2, self.cfg.straight_max_steps))
-        gripper = gripper_override if gripper_override is not None else float(joints[-1])
+        gripper = gripper_override if gripper_override is not None else self.commanded_gripper(joints[-1])
 
         logger.info("Move straight to %s: %.0fmm in %d steps", name or "pose", distance * 1000, steps)
         waypoints = []
@@ -815,9 +918,14 @@ class PickAndPlaceYolo:
             time.sleep(self.cfg.settle_s)
 
     def move_gripper_to(self, value: float, duration_s: float | None = None) -> None:
-        current = self.get_current_pose()
-        current["gripper.pos"] = float(value)
-        self.move_to_pose(current, duration_s or self.cfg.gripper_move_duration_s, "gripper")
+        # Hold the arm at its last commanded pose, not at the measured one.
+        # Re-anchoring five joints to wherever gravity left them turns a
+        # gripper-only command into a small arm move that gives up the droop
+        # correction the previous move just paid for.
+        pose = dict(self._commanded) if self._commanded else self.get_current_pose()
+        pose = {k: float(v) for k, v in pose.items() if k.endswith(".pos")}
+        pose["gripper.pos"] = float(value)
+        self.move_to_pose(pose, duration_s or self.cfg.gripper_move_duration_s, "gripper")
 
     def solve_ik(
         self,
@@ -862,6 +970,7 @@ class PickAndPlaceYolo:
         correct: bool = True,
         correct_vertical_only: bool = False,
         wrist_roll_offset_deg: float | None = None,
+        max_speed_deg_s: float | None = None,
     ) -> None:
         if wrist_roll_offset_deg is None:
             wrist_roll_offset_deg = self.cfg.wrist_roll_offset_deg
@@ -874,7 +983,11 @@ class PickAndPlaceYolo:
         if gripper_override is not None:
             target_pose["gripper.pos"] = float(gripper_override)
         else:
-            target_pose["gripper.pos"] = current[-1]
+            target_pose["gripper.pos"] = self.commanded_gripper(current[-1])
+        if max_speed_deg_s is not None:
+            current_joints = self.current_joint_deg()
+            travel = float(np.max(np.abs(np.array([target_pose[f"{n}.pos"] for n in ARM_JOINT_ORDER]) - current_joints[:5])))
+            duration_s = max(duration_s, travel / max_speed_deg_s)
         self.move_to_pose(target_pose, duration_s, name)
 
         # The servos hold position with a soft gain, so at long reach the arm
@@ -921,10 +1034,24 @@ class PickAndPlaceYolo:
             # Cap the lead so an already-marginal target cannot be pushed past
             # the arm's reach, and refuse a correction IK cannot actually hit.
             lead = gap * min(1.0, self.cfg.max_correction_lead_m / max(float(np.linalg.norm(gap)), 1e-9))
-            corrected, corrected_err = self.solve_ik(reached_joints, base + lead, keep_orientation)
+            # Shorten the lead rather than abandoning the correction. Leading
+            # the target overshoots on purpose to cancel droop, but out at the
+            # edge that lead point is off the end of the arm's range -- and
+            # bailing there left the arm 23-41mm short of a target that was
+            # itself reachable, which is exactly where the jaws then closed on
+            # a block's edge. Half lead, then none, before giving up.
+            corrected = corrected_err = None
+            for scale in (1.0, 0.5, 0.0):
+                candidate, candidate_err = self.solve_ik(reached_joints, base + lead * scale, keep_orientation)
+                if candidate_err <= self.cfg.correction_max_residual_m:
+                    corrected, corrected_err = candidate, candidate_err
+                    if scale < 1.0:
+                        logger.info("%s: lead shortened to %.0f%% to stay reachable", name or "pose", scale * 100)
+                    break
+                corrected, corrected_err = candidate, candidate_err
             if corrected_err > self.cfg.correction_max_residual_m:
                 logger.warning(
-                    "%s: correction target unreachable (%.1fmm residual) -- leaving it where it is",
+                    "%s: correction target unreachable even with no lead (%.1fmm residual) -- leaving it",
                     name or "pose", corrected_err * 1000,
                 )
                 break
@@ -985,14 +1112,21 @@ class PickAndPlaceYolo:
     def slot_index_for(self, color: str) -> int:
         """Which slot this colour belongs in.
 
-        A fixed slot per colour, rather than "next free slot", so the layout is
-        the same every run and a block re-picked after rolling out goes back
-        where it was instead of taking someone else's place.
+        Remembered on first placement and reused afterwards. Falling back to a
+        running count meant a re-picked block went to whatever number the
+        counter had reached -- and since the counter also counts re-placements,
+        that was somebody else's slot, with a block already in it.
         """
         order = list(self.cfg.drop_slot_colors)
         if color in order:
             return order.index(color)
-        return self.placed_count % max(sum(self.cfg.drop_row_counts), 1)
+        if color in self._slot_by_color:
+            return self._slot_by_color[color]
+        total = max(sum(self.cfg.drop_row_counts), 1)
+        taken = set(self._slot_by_color.values())
+        index = next((i for i in range(total) if i not in taken), len(self._slot_by_color) % total)
+        self._slot_by_color[color] = index
+        return index
 
     def drop_slot_table_cm(self, placed_count: int) -> tuple[str, float, float]:
         """Table-frame (cm) centre of the nth slot in the 3+2 grid."""
@@ -1060,19 +1194,44 @@ class PickAndPlaceYolo:
         return pixels
 
     def is_placed(self, block) -> bool:
-        """True when a block is sitting in one of our slots.
+        """True when a block counts as tidied away.
 
-        Both tests have to pass. Slot proximity alone accepted a block up to
-        40px -- around 5cm -- from its slot, which is far enough to be wholly
-        outside the zone; a run ended reporting every block placed while its
-        own detector still said two were outside. The polygon test alone
-        flickers for a block resting on the boundary line. Together: near the
-        slot it was aimed at, AND actually in the zone.
+        The rule is "not sticking out of the zone", so this asks whether the
+        block's FOOTPRINT still overlaps the true target polygon -- not whether
+        its centre sits inside a shrunk copy of it. `block.in_target` is a
+        centre-point test against a polygon pulled in by target_inset_px, which
+        fails a 25mm block resting on the line even though it is only half a
+        block over: those got picked up and put down again, run after run.
+
+        Slot proximity is kept as an alternative, not a second requirement. A
+        block parked neatly in its slot passes on proximity; a block nudged
+        onto the boundary passes on overlap. Requiring both meant a straddler
+        satisfied neither.
         """
-        if not block.in_target:
-            return False
+        if self._overlaps_target(block):
+            return True
         centre = np.array([block.cx, block.cy])
-        return any(float(np.linalg.norm(centre - slot)) <= self.cfg.slot_tolerance_px for slot in self.slot_pixels())
+        near_slot = any(
+            float(np.linalg.norm(centre - slot)) <= self.cfg.slot_tolerance_px for slot in self.slot_pixels()
+        )
+        return bool(near_slot and block.in_target)
+
+    def _overlaps_target(self, block) -> bool:
+        """Does any part of the block's box lie inside the true target polygon?"""
+        polygon = self.detector.target_polygon
+        if polygon is None:
+            return False
+        polygon = np.asarray(polygon, dtype=np.float32)
+        x, y, w, h = block.bbox
+        # Test the corners and the centre: enough for a convex zone and a box
+        # much smaller than it, and cheap.
+        probes = [
+            (x, y), (x + w, y), (x, y + h), (x + w, y + h),
+            (block.cx, block.cy),
+        ]
+        return any(
+            cv2.pointPolygonTest(polygon, (float(px), float(py)), False) >= 0 for px, py in probes
+        )
 
     def refresh_queue(self) -> int:
         """Park at `observe`, look once, and queue every block not yet in a slot."""
@@ -1157,7 +1316,7 @@ class PickAndPlaceYolo:
         approach_xyz = self._reachable_approach(hover_xyz, approach_xyz, keep_orientation)
         open_value = self.gripper_open_value()
         approach_open = self.cfg.gripper_approach_open
-        self.move_to_cartesian(approach_xyz, keep_orientation, self.cfg.hover_duration_s, "approach_high", gripper_override=approach_open, wrist_roll_offset_deg=self.cfg.wrist_roll_offset_deg)
+        self.move_to_cartesian(approach_xyz, keep_orientation, self.cfg.hover_duration_s, "approach_high", gripper_override=approach_open, wrist_roll_offset_deg=self.cfg.wrist_roll_offset_deg, max_speed_deg_s=self.cfg.approach_max_speed_deg_s)
         # Retry in place before paying for a full observe-and-re-detect round
         # trip: an axial approach rarely moves the block, so the second try at
         # the same coordinates usually just needs the jaws seated better.
@@ -1165,8 +1324,9 @@ class PickAndPlaceYolo:
         for retry in range(self.cfg.in_place_retries + 1):
             label = "pick" if retry == 0 else f"pick_retry{retry}"
             self.move_to_cartesian(hover_xyz, keep_orientation, self.cfg.hover_duration_s, f"{label}_hover", gripper_override=approach_open, wrist_roll_offset_deg=self.cfg.wrist_roll_offset_deg)
-            self.move_straight_to(grasp_xyz, keep_orientation, self.cfg.descend_duration_s, f"{label}_descend", gripper_override=approach_open, wrist_roll_offset_deg=self.cfg.wrist_roll_offset_deg)
-            self.move_gripper_to(self.cfg.gripper_close_value)
+            with self.descent_floor(self.cfg.descent_z_floor_m):
+                self.move_straight_to(grasp_xyz, keep_orientation, self.cfg.descend_duration_s, f"{label}_descend", gripper_override=approach_open, wrist_roll_offset_deg=self.cfg.wrist_roll_offset_deg)
+                self.move_gripper_to(self.cfg.gripper_close_value)
             if self.grasp_succeeded():
                 held = True
                 break
@@ -1178,7 +1338,9 @@ class PickAndPlaceYolo:
             # may be stale too -- drop it and look again from scratch.
             logger.warning("Giving up on %s in place -- re-detecting.", chosen.color)
             self._queue.clear()
-            self.move_to_cartesian(approach_xyz, keep_orientation, self.cfg.lift_duration_s, "miss_retreat", gripper_override=approach_open)
+            # Also straight: the retreat starts right beside a block the jaws
+            # just failed to grip, and an arc there knocks it somewhere new.
+            self.move_straight_to(approach_xyz, keep_orientation, self.cfg.lift_duration_s, "miss_retreat", gripper_override=approach_open)
             return None
 
         # Straight up from where the block was grasped. Retracing the axial
@@ -1199,7 +1361,12 @@ class PickAndPlaceYolo:
             np.array([target_xyz[0], target_xyz[1], target_xyz[2] + self.cfg.transit_height_m]),
             keep_orientation,
         )
-        self.move_to_cartesian(transit_xyz, keep_orientation, self.cfg.lift_duration_s, "lift", gripper_override=self.cfg.gripper_close_value)
+        # Straight up, not through a joint-space arc. The descent was
+        # straightened for exactly this reason and the lift was left behind:
+        # interpolating joints bows the tip sideways by up to 31mm, and doing
+        # that while carrying sweeps the block through the ones still on the
+        # table. The ascent is short and vertical, so the line is easy to hold.
+        self.move_straight_to(transit_xyz, keep_orientation, self.cfg.lift_duration_s, "lift", gripper_override=self.cfg.gripper_close_value)
 
         # Check again now that the block has been picked up. Closing on a block
         # only proves the jaws met it, not that they are holding it: a grip on
@@ -1222,15 +1389,31 @@ class PickAndPlaceYolo:
         drop_orientation = self.grasp_orientation_for(drop_xyz)
 
         drop_high = np.array([drop_xyz[0], drop_xyz[1], drop_xyz[2] + self.cfg.transit_height_m])
-        drop_release = np.array([drop_xyz[0], drop_xyz[1], drop_xyz[2] + self.cfg.release_height_m])
+        # Give the release the same floor guard the grasp has. The arm settles
+        # ~18-20mm below any commanded point at the far row's reach, which is
+        # the entire release_height allowance, so the carried block was being
+        # pressed onto the board before the jaws opened -- and the taught plane
+        # this height comes from scatters low in places, turning that press
+        # into a jam. Sag is added to the floor, not to the target, so a
+        # release that already clears the table is left where it is.
+        drop_release = self.clamp_to_table(
+            np.array([drop_xyz[0], drop_xyz[1], drop_xyz[2] + self.cfg.release_height_m]),
+            f"{drop_name}_release",
+            self.expected_sag_m(drop_xyz),
+        )
         self.move_to_cartesian(drop_high, drop_orientation, self.cfg.drop_duration_s, f"{drop_name}_high", gripper_override=self.cfg.gripper_close_value)
-        self.move_to_cartesian(drop_release, drop_orientation, self.cfg.descend_duration_s, f"{drop_name}_release", gripper_override=self.cfg.gripper_close_value, correct=False)
-
-        self.move_gripper_to(approach_open)
+        # Straight down onto the slot, for the same reason the pick descent is:
+        # an arc here drags the carried block sideways across whatever is
+        # already sitting in the zone before the jaws open.
+        with self.descent_floor(self.cfg.descent_z_floor_m):
+            self.move_straight_to(drop_release, drop_orientation, self.cfg.descend_duration_s, f"{drop_name}_release", gripper_override=self.cfg.gripper_close_value)
+            self.move_gripper_to(approach_open)
         self.move_to_cartesian(drop_high, drop_orientation, self.cfg.lift_duration_s, f"{drop_name}_clear", gripper_override=approach_open)
         if not self.cfg.dry_run:
             time.sleep(self.cfg.post_place_wait_s)
-        self.placed_count += 1
+        # Count distinct blocks, not placement events: re-seating a block that
+        # rolled out was inflating this to 6 and 7 with five blocks on the board.
+        self.placed_count = len(self._slot_by_color) if self._slot_by_color else self.placed_count + 1
         return True
 
     def run(self) -> None:

@@ -1,29 +1,29 @@
 {
   "homography_pixel_to_robot_xy_m": [
     [
-      -0.0002465597013680715,
-      0.0018316779071641425,
-      -0.05814295961061013
+      -0.00011720536447544883,
+      0.002147967574607947,
+      -0.12620537532232828
     ],
     [
-      0.0013265333606628511,
-      0.00026285518948029234,
-      -0.43881469034663007
+      0.001520087280413413,
+      0.00010474287462559295,
+      -0.4908985234266868
     ],
     [
-      -5.6607298562482126e-05,
-      0.0009171602534535491,
+      -2.0555262824589538e-05,
+      0.0013222880948225804,
       1.0
     ]
   ],
   "grasp_z_plane_abc": [
-    0.0647691607538159,
-    0.03412305720678402,
-    -0.0008722329752132549
+    0.07813605062291737,
+    0.0033536578114451293,
+    0.020362516726447275
   ],
-  "grasp_z_mean_m": 0.012703556865184047,
-  "grasp_z_min_m": -0.012983093041816551,
-  "grasp_z_max_m": 0.03992824691341684,
-  "sample_count": 12,
-  "note": "Learned from leader-arm demonstrated grasps, so block-height parallax is already baked in. Maps top-camera pixel -> robot xy (m). Re-collect if the camera, table, or robot base moves."
+  "grasp_z_mean_m": 0.03557935279307237,
+  "grasp_z_min_m": -0.000645186531677,
+  "grasp_z_max_m": 0.05972079008733219,
+  "sample_count": 555,
+  "note": "Fitted from 629 grasps mined out of the 223-episode teleop dataset (eslab1234/task1_hybrid_5blocks_v3_223ep_merged), RANSAC-filtered. Replaces a 12-point hand-taught fit whose leave-one-out error was 32mm median; this is 11mm."
 }
