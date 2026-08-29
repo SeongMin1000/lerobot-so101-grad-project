@@ -58,7 +58,7 @@ Read before acting:
 - **Batch Size**: 16 (RTX 3090 24GB 기준 VRAM ~1GB 미만으로 매우 가벼움)
 - **Steps**: **100,000 ~ 150,000 steps** (기본 10만~15만 스텝 권장)
 - **Optimizer**: AdamW, Learning Rate **`1e-4`** (또는 `1e-5`), Weight Decay `1e-4`
-- **Action Chunk**: `n_action_steps=100`
+- **Action Chunk (고정)**: **`--policy.chunk_size=60 --policy.n_action_steps=60`** (60스텝으로 통일 고정)
 - **체크포인트 저장 주기**: `save_freq=10000` (1만 스텝마다 저장)
 - **이미지 증강**: `--dataset.image_transforms.enable=true` (기본 활성화)
 
@@ -92,6 +92,8 @@ python -m lerobot.scripts.lerobot_train \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
   --policy.type=act \
+  --policy.chunk_size=60 \
+  --policy.n_action_steps=60 \
   --policy.device=cuda \
   --output_dir="outputs/train/${RUN_NAME}" \
   --job_name="${RUN_NAME}" \
@@ -119,6 +121,7 @@ python -m lerobot.scripts.lerobot_train \
   - `--policy.freeze_vision_encoder=false` (비전 인코더 동결 완전 해제)
   - `--policy.train_expert_only=false` (VLM 백본 전체 학습)
   - `--policy.train_state_proj=true` (관절 프로젝션 레이어 학습)
+- **Action Chunk (고정)**: **`--policy.chunk_size=60 --policy.n_action_steps=60`** (60스텝으로 통일 고정)
 - **Steps**: **150,000 steps** (30만~45만 프레임 기준 약 5.2~5.5 Epochs 달성)
 - **Batch Size**: 16 (RTX 3090 24GB 기준 VRAM 최적화)
 - **Optimizer & LR**:
@@ -147,6 +150,8 @@ python -m lerobot.scripts.lerobot_train \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
   --policy.type=smolvla \
+  --policy.chunk_size=60 \
+  --policy.n_action_steps=60 \
   --policy.device=cuda \
   --output_dir="outputs/train/${RUN_NAME}" \
   --job_name="${RUN_NAME}" \
