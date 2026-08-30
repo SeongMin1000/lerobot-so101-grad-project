@@ -71,9 +71,11 @@ class SmolVLAReinFlowPolicy(SmolVLAPolicy):
 
     def get_log_sigmas(self, num_steps: int, device: torch.device) -> Tensor:
         """Retrieve or interpolate step-wise noise sigma."""
-        if len(self.log_sigmas) == num_steps:
-            return torch.clamp(self.log_sigmas.to(device), min=math.log(1e-4), max=math.log(0.5)).exp()
-        return torch.full((num_steps,), self.default_sigma, device=device)
+        log_sigmas = getattr(self, "log_sigmas", None)
+        if log_sigmas is not None and len(log_sigmas) == num_steps:
+            return torch.clamp(log_sigmas.to(device), min=math.log(1e-4), max=math.log(0.5)).exp()
+        default_sigma = getattr(self, "default_sigma", 0.05)
+        return torch.full((num_steps,), float(default_sigma), device=device)
 
     def sample_actions_stochastic(
         self,

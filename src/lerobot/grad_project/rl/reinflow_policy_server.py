@@ -98,6 +98,10 @@ class ReinFlowPolicyServer(PolicyServer):
         base_policy.__class__ = SmolVLAReinFlowPolicy
         base_policy.default_rl_steps = self.rf_config.rl_steps
         base_policy.default_sigma = self.rf_config.sigma
+        import math
+        base_policy.log_sigmas = torch.nn.Parameter(
+            torch.full((self.rf_config.rl_steps,), math.log(self.rf_config.sigma), dtype=torch.float32)
+        ).to(self.device)
         hidden_dim = getattr(getattr(base_policy.model, "vlm_with_expert", None), "expert_hidden_size", 576)
         critic = SmolVLACriticHead(hidden_dim=hidden_dim).to(self.device)
         base_policy.critic = critic
