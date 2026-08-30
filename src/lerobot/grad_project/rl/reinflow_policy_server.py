@@ -258,15 +258,17 @@ class ReinFlowPolicyServer(PolicyServer):
             self.logger.info("=" * 65)
             update_start = time.perf_counter()
 
-            # Compute Generalized Advantage Estimation (GAE)
-            self.rf_buffer.compute_advantages(gamma=0.99, gae_lambda=0.95)
-
             # Run PPO Mini-batch Optimization
-            metrics = self.rf_trainer.train_step(
-                self.rf_buffer,
-                batch_size=min(8, len(self.rf_buffer)),
-                ppo_epochs=self.rf_config.ppo_epochs,
-            )
+            all_metrics = []
+            for epoch in range(self.rf_config.ppo_epochs):
+                for batch in self.rf_buffer.get_batches(batch_size=min(8, len(self.rf_buffer)), shuffle=True):
+                    m = self.rf_trainer.train_step(batch)
+                    all_metrics.append(m)
+
+            avg_metrics = {}
+            if all_metrics:
+                for k in all_metrics[0].keys():
+                    avg_metrics[k] = float(np.mean([m[k] for m in all_metrics]))
 
             self.rf_buffer.clear()
             self._total_updates += 1
@@ -279,9 +281,11 @@ class ReinFlowPolicyServer(PolicyServer):
 
             self.logger.info(
                 f"[REINFLOW PPO UPDATE #{self._total_updates} FINISHED in {elapsed:.2f}s]\n"
-                f"  • Policy Loss:    {metrics.get('policy_loss', 0.0):.4f}\n"
-                f"  • Value Loss:     {metrics.get('value_loss', 0.0):.4f}\n"
-                f"  • KL Divergence:  {metrics.get('kl_divergence', 0.0):.4f}\n"
+                f"  • Total Loss:     {avg_metrics.get('loss_total', 0.0):.4f}\n"
+                f"  • Policy Loss:    {avg_metrics.get('loss_policy', 0.0):.4f}\n"
+                f"  • Value Loss:     {avg_metrics.get('loss_value', 0.0):.4f}\n"
+                f"  • Approx KL:      {avg_metrics.get('approx_kl', 0.0):.4f}\n"
+                f"  • Mean Ratio:     {avg_metrics.get('mean_ratio', 1.0):.4f}\n"
                 f"  • Checkpoint:     {latest_path}\n"
                 + "=" * 65 + "\n"
             )
