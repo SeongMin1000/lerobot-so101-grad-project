@@ -81,15 +81,34 @@ class ReinFlowPolicyServer(PolicyServer):
 
         self.reward_evaluator = AutoRewardEvaluator(target_verifier=self.target_verifier)
 
-    def InitPolicySpecs(self, policy_specs, context):  # noqa: N802
-        """Initialize and wrap policy with SmolVLAReinFlowPolicy."""
+    def SendPolicyInstructions(self, request, context):  # noqa: N802
+        """Receive policy instructions from the robot client and wrap with SmolVLAReinFlowPolicy."""
+        if not self.running:
+            self.logger.warning("Server is not running. Ignoring policy instructions.")
+            return services_pb2.Empty()
+
+        client_id = context.peer()
+        import pickle
+        from lerobot.async_inference.helpers import RemotePolicyConfig
+        from lerobot.async_inference.constants import SUPPORTED_POLICIES
+
+        policy_specs = pickle.loads(request.data)  # nosec
+        if not isinstance(policy_specs, RemotePolicyConfig):
+            raise TypeError(f"Policy specs must be a RemotePolicyConfig. Got {type(policy_specs)}")
+
+        self.logger.info(
+            f"[REINFLOW] Receiving policy instructions from {client_id} | "
+            f"Policy type: {policy_specs.policy_type} | "
+            f"Pretrained: {policy_specs.pretrained_name_or_path} | "
+            f"Actions per chunk: {policy_specs.actions_per_chunk} | "
+            f"Device: {policy_specs.device}"
+        )
         self.device = policy_specs.device
         self.policy_type = policy_specs.policy_type
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
         self._logged_policy_input_stats = False
 
-        self.logger.info(f"[REINFLOW] Loading SmolVLA model from: {policy_specs.pretrained_name_or_path}")
         start = time.perf_counter()
 
         # Load policy and transmute to SmolVLAReinFlowPolicy
