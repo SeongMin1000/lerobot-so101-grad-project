@@ -106,6 +106,12 @@ class ReinFlowPolicyServer(PolicyServer):
         critic = SmolVLACriticHead(hidden_dim=hidden_dim).to(self.device)
         base_policy.critic = critic
         base_policy.critic_head = critic
+
+        # Bind ReinFlow methods explicitly to eliminate class mismatch
+        base_policy.sample_actions_stochastic = SmolVLAReinFlowPolicy.sample_actions_stochastic.__get__(base_policy, SmolVLAReinFlowPolicy)
+        base_policy.get_log_sigmas = SmolVLAReinFlowPolicy.get_log_sigmas.__get__(base_policy, SmolVLAReinFlowPolicy)
+        base_policy.evaluate_trajectory_log_prob = SmolVLAReinFlowPolicy.evaluate_trajectory_log_prob.__get__(base_policy, SmolVLAReinFlowPolicy)
+
         self.policy = base_policy
         self.policy.to(self.device)
 
@@ -145,7 +151,7 @@ class ReinFlowPolicyServer(PolicyServer):
         with self._rollout_lock:
             # 1. Stochastic ReinFlow Action Sampling
             with torch.no_grad():
-                if isinstance(self.policy, SmolVLAReinFlowPolicy):
+                if hasattr(self.policy, "sample_actions_stochastic"):
                     actions, log_prob, trajectory, extra_info = self.policy.sample_actions_stochastic(
                         observation,
                         num_steps=self.rf_config.rl_steps,
@@ -154,6 +160,7 @@ class ReinFlowPolicyServer(PolicyServer):
                     )
                     value_est = extra_info["values"].item() if extra_info.get("values") is not None else 0.0
                 else:
+                    self.logger.warning("[REINFLOW WARN] policy lacks sample_actions_stochastic! Calling standard predict.")
                     actions = self.policy.predict_action_chunk(observation)
                     log_prob = torch.tensor(0.0)
                     trajectory = []
