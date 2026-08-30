@@ -92,24 +92,14 @@ class ReinFlowPolicyServer(PolicyServer):
         self.logger.info(f"[REINFLOW] Loading SmolVLA model from: {policy_specs.pretrained_name_or_path}")
         start = time.perf_counter()
 
-        # Load as SmolVLAReinFlowPolicy
-        try:
-            self.policy = SmolVLAReinFlowPolicy.from_pretrained(
-                policy_specs.pretrained_name_or_path,
-                default_rl_steps=self.rf_config.rl_steps,
-                default_sigma=self.rf_config.sigma,
-            )
-        except Exception as e:
-            self.logger.warning(f"[REINFLOW] direct from_pretrained failed ({e}). Loading standard & wrapping...")
-            policy_class = get_policy_class(self.policy_type)
-            base_policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
-            self.policy = SmolVLAReinFlowPolicy(
-                config=base_policy.config,
-                default_rl_steps=self.rf_config.rl_steps,
-                default_sigma=self.rf_config.sigma,
-            )
-            self.policy.load_state_dict(base_policy.state_dict(), strict=False)
-
+        # Load policy and transmute to SmolVLAReinFlowPolicy
+        policy_class = get_policy_class(self.policy_type)
+        base_policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
+        base_policy.__class__ = SmolVLAReinFlowPolicy
+        base_policy.default_rl_steps = self.rf_config.rl_steps
+        hidden_dim = getattr(getattr(base_policy.model, "vlm_with_expert", None), "expert_hidden_size", 576)
+        base_policy.critic_head = SmolVLACriticHead(hidden_dim=hidden_dim).to(self.device)
+        self.policy = base_policy
         self.policy.to(self.device)
 
         # Initialize ReinFlow Buffer and PPO Trainer
