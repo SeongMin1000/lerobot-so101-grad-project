@@ -430,56 +430,39 @@ class TargetOccupancyVerifier:
         kernel_size = max(1, int(self.cfg.get("morph_kernel", 5)))
         kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
 
-        # 1. Clean foreground inside target area
-        cleaned_target = cv2.morphologyEx(target_foreground, cv2.MORPH_OPEN, kernel)
-        cleaned_target = cv2.morphologyEx(cleaned_target, cv2.MORPH_CLOSE, kernel)
-
-        # 2. Extract connected components (each candidate block)
-        num_labels, labels_im, stats, _ = cv2.connectedComponentsWithStats(
-            cleaned_target, connectivity=8
-        )
-
-        min_component_overlap = float(self.cfg.get("min_component_slot_overlap", 0.35))
-        exclusive_slot_fgs = [np.zeros_like(cleaned_target) for _ in self.slot_polygons]
-
-        # 3. Assign each block exclusively to the single slot with maximum overlap
-        for k in range(1, num_labels):
-            comp_area = stats[k, cv2.CC_STAT_AREA]
-            if comp_area < min_area * 0.3:
-                continue
-
-            comp_mask = (labels_im == k).astype(np.uint8) * 255
-            overlaps = [
-                int(cv2.countNonZero(cv2.bitwise_and(comp_mask, s_mask)))
-                for s_mask in slot_masks
-            ]
-            best_idx = int(np.argmax(overlaps))
-            best_overlap = overlaps[best_idx]
-
-            # Dominant assignment: only assign if largest overlap meets criteria
-            if best_overlap >= min_area * 0.7:
-                exclusive_slot_fgs[best_idx] = cv2.bitwise_or(
-                    exclusive_slot_fgs[best_idx],
-                    cv2.bitwise_and(comp_mask, slot_masks[best_idx])
-                )
-
         statuses = []
 
         for index, (
             label,
             polygon,
             slot_mask,
-            slot_fg,
         ) in enumerate(
             zip(
                 self.slot_labels,
                 self.slot_polygons,
                 slot_masks,
-                exclusive_slot_fgs,
                 strict=True,
             )
         ):
             slot_pixels = int(cv2.countNonZero(slot_mask))
+
+            # Isolate this slot first to prevent adjacent blocks from interfering
+            slot_fg = cv2.bitwise_and(
+                target_foreground,
+                slot_mask,
+            )
+            slot_fg = cv2.morphologyEx(
+                slot_fg,
+                cv2.MORPH_OPEN,
+                kernel,
+            )
+            slot_fg = cv2.morphologyEx(
+                slot_fg,
+                cv2.MORPH_CLOSE,
+                kernel,
+            )
+            slot_fg = cv2.bitwise_and(slot_fg, slot_mask)
+
             changed_pixels = int(cv2.countNonZero(slot_fg))
             ratio = changed_pixels / max(1, slot_pixels)
 
