@@ -97,8 +97,11 @@ class ReinFlowPolicyServer(PolicyServer):
         base_policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
         base_policy.__class__ = SmolVLAReinFlowPolicy
         base_policy.default_rl_steps = self.rf_config.rl_steps
+        base_policy.default_sigma = self.rf_config.sigma
         hidden_dim = getattr(getattr(base_policy.model, "vlm_with_expert", None), "expert_hidden_size", 576)
-        base_policy.critic_head = SmolVLACriticHead(hidden_dim=hidden_dim).to(self.device)
+        critic = SmolVLACriticHead(hidden_dim=hidden_dim).to(self.device)
+        base_policy.critic = critic
+        base_policy.critic_head = critic
         self.policy = base_policy
         self.policy.to(self.device)
 
