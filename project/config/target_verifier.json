@@ -34,7 +34,7 @@
   "morph_kernel": 5,
   "min_foreground_ratio": 0.035,
   "min_largest_contour_area": 160.0,
+  "verify_color": true,
   "stable_frames": 6,
-  "slot_layout": "two_rows_3_2",
-  "min_component_slot_overlap": 0.15
+  "slot_layout": "two_rows_3_2"
 }

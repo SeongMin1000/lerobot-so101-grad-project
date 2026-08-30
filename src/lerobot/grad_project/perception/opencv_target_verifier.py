@@ -69,12 +69,34 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Slot occupancy test. Tune these using --debug.
     "min_foreground_ratio": 0.035,
     "min_largest_contour_area": 160.0,
-    "min_component_slot_overlap": 0.15,
+    "verify_color": True,
 
     # A slot must show the same occupied state for this many frames before the
     # stable-check helper accepts it.
     "stable_frames": 6,
 }
+
+
+def classify_slot_hsv(pixels_hsv: np.ndarray) -> str:
+    """Classify the dominant block color from segmented HSV pixels."""
+    if len(pixels_hsv) < 40:
+        return "none"
+    h = float(np.median(pixels_hsv[:, 0]))
+    s = float(np.median(pixels_hsv[:, 1]))
+    v = float(np.median(pixels_hsv[:, 2]))
+
+    if (h <= 12 or h >= 165) and s >= 45:
+        return "red"
+    elif 15 <= h <= 40:
+        if s >= 130 and v >= 120:
+            return "yellow"
+        else:
+            return "wood"
+    elif 42 <= h <= 85 and s >= 25:
+        return "green"
+    elif 88 <= h <= 135 and s >= 30:
+        return "blue"
+    return "unknown"
 
 
 @dataclass(frozen=True)
@@ -85,6 +107,8 @@ class SlotStatus:
     foreground_ratio: float
     largest_contour_area: float
     polygon: list[list[float]]
+    detected_color: str = "none"
+    color_matched: bool = True
 
 
 @dataclass(frozen=True)
@@ -431,6 +455,8 @@ class TargetOccupancyVerifier:
         kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
 
         statuses = []
+        verify_color = bool(self.cfg.get("verify_color", True))
+        hsv_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV) if verify_color else None
 
         for index, (
             label,
@@ -479,9 +505,17 @@ class TargetOccupancyVerifier:
                 default=0.0,
             )
 
+            detected_color = "none"
+            color_matched = True
+            if verify_color and hsv_frame is not None and changed_pixels >= 40:
+                pixels_hsv = hsv_frame[slot_fg > 0]
+                detected_color = classify_slot_hsv(pixels_hsv)
+                color_matched = (detected_color == label)
+
             occupied = (
                 ratio >= min_ratio
                 and largest >= min_area
+                and (not verify_color or color_matched)
             )
 
             statuses.append(
@@ -492,6 +526,8 @@ class TargetOccupancyVerifier:
                     foreground_ratio=float(ratio),
                     largest_contour_area=float(largest),
                     polygon=polygon.tolist(),
+                    detected_color=detected_color,
+                    color_matched=color_matched,
                 )
             )
 
@@ -514,27 +550,33 @@ class TargetOccupancyVerifier:
 
         for slot, polygon in zip(result.slots, self.slot_polygons, strict=True):
             pts = polygon.astype(np.int32).reshape((-1, 1, 2))
-            # Magenta means OCCUPIED; it is not a detected block color.\n            line_color = (255, 0, 255) if slot.occupied else (0, 165, 255)
-            # 자주색: OCCUPIED / 주황색: EMPTY
-            line_color = (
-                (255, 0, 255)
-                if slot.occupied
-                else (0, 165, 255)
-            )
+            
+            # Green for OCCUPIED (matching color)
+            # Amber/Yellow for MISMATCH (block present but wrong color/spill)
+            # Orange for EMPTY
+            if slot.occupied:
+                line_color = (0, 255, 0)
+                status_str = "OCC"
+            elif slot.detected_color not in ("none", "unknown") and not slot.color_matched:
+                line_color = (0, 200, 255)
+                status_str = f"MIS({slot.detected_color})"
+            else:
+                line_color = (0, 100, 255)
+                status_str = "EMPTY"
+
             cv2.polylines(bgr, [pts], True, line_color, 2)
 
             center = np.mean(polygon, axis=0).astype(int)
             text = (
                 f"{slot.index + 1}:{slot.label} "
-                f"{'OCC' if slot.occupied else 'EMPTY'} "
-                f"r={slot.foreground_ratio:.2f} a={slot.largest_contour_area:.0f}"
+                f"{status_str} a={slot.largest_contour_area:.0f}"
             )
             cv2.putText(
                 bgr,
                 text,
                 (int(center[0]) - 55, int(center[1])),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.38,
+                0.36,
                 line_color,
                 1,
                 cv2.LINE_AA,
