@@ -49,7 +49,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # The lower two-slot row uses the full target width (two equal half-width
     # cells) so its horizontal detection regions are wider.
     "slot_layout": "two_rows_3_2",
-    "slot_labels": ["blue", "wood", "green", "yellow", "red"],
+    "slot_labels": ["blue", "green", "wood", "yellow", "red"],
     "slot_inner_margin": 0.04,
 
     # Empty-board reference image. Capture it with the robot at observe pose and
