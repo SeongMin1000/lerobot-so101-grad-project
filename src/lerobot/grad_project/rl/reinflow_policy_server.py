@@ -145,7 +145,7 @@ class ReinFlowPolicyServer(PolicyServer):
                     actions, log_prob, trajectory, extra_info = self.policy.sample_actions_stochastic(
                         observation,
                         num_steps=self.rf_config.rl_steps,
-                        sigma=self.rf_config.sigma,
+                        custom_sigma=self.rf_config.sigma,
                         return_trajectory=True,
                     )
                     value_est = extra_info["values"].item() if extra_info.get("values") is not None else 0.0

@@ -81,6 +81,7 @@ class SmolVLAReinFlowPolicy(SmolVLAPolicy):
         num_steps: Optional[int] = None,
         custom_sigma: Optional[float] = None,
         return_trajectory: bool = True,
+        sigma: Optional[float] = None,
     ) -> Tuple[Tensor, Tensor, Optional[Tensor], Dict[str, Any]]:
         """Stochastic flow matching action generation with tractable log-probabilities.
         
@@ -96,6 +97,7 @@ class SmolVLAReinFlowPolicy(SmolVLAPolicy):
             trajectory: Intermediate latent trajectory (B, num_steps + 1, chunk_size, max_action_dim).
             extra_info: Value estimate V(s) and auxiliary stats.
         """
+        custom_sigma = custom_sigma if custom_sigma is not None else sigma
         num_steps = num_steps or self.default_rl_steps
         batch = self._prepare_batch(batch)
 
