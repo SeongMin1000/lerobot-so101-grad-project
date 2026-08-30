@@ -54,14 +54,17 @@ class ReinFlowRolloutBuffer:
         done: bool,
         value: float = 0.0,
     ) -> None:
-        """Add a single step transition to the buffer."""
         # Ensure tensors are detached and on cpu or specified device
-        obs_detached = {k: v.detach().clone() for k, v in obs.items()}
+        obs_detached = {k: v.detach().clone() for k, v in obs.items() if isinstance(v, torch.Tensor)}
+        traj_tensor = trajectory.detach().clone() if isinstance(trajectory, torch.Tensor) else torch.empty(0)
+        log_prob_tensor = log_prob.detach().clone() if isinstance(log_prob, torch.Tensor) else torch.tensor(float(log_prob))
+        action_tensor = action.detach().clone() if isinstance(action, torch.Tensor) else torch.tensor(action)
+        
         trans = Transition(
             obs=obs_detached,
-            action=action.detach().clone(),
-            trajectory=trajectory.detach().clone(),
-            log_prob=log_prob.detach().clone(),
+            action=action_tensor,
+            trajectory=traj_tensor,
+            log_prob=log_prob_tensor,
             reward=float(reward),
             done=bool(done),
             value=float(value),
