@@ -29,7 +29,7 @@ from lerobot.grad_project.perception.opencv_target_verifier import (
     load_or_default_config,
 )
 from lerobot.grad_project.rl.buffer import ReinFlowRolloutBuffer
-from lerobot.grad_project.rl.reinflow_smolvla import SmolVLAReinFlowPolicy
+from lerobot.grad_project.rl.reinflow_smolvla import SmolVLACriticHead, SmolVLAReinFlowPolicy
 from lerobot.grad_project.rl.reward_evaluator import AutoRewardEvaluator
 from lerobot.grad_project.rl.trainer import ReinFlowPPOTrainer
 from lerobot.policies import get_policy_class, make_pre_post_processors
