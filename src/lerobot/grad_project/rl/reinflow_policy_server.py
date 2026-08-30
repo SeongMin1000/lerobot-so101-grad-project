@@ -6,20 +6,20 @@ ReinFlowRolloutBuffer (GAE advantage estimation), and ReinFlowPPOTrainer
 into the Hugging Face LeRobot Async Policy Server.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import cv2
 import draccus
+import grpc
 import numpy as np
 import torch
+from concurrent import futures
 
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.helpers import TimedObservation, get_logger
@@ -33,21 +33,21 @@ from lerobot.grad_project.rl.reinflow_smolvla import SmolVLAReinFlowPolicy
 from lerobot.grad_project.rl.reward_evaluator import AutoRewardEvaluator
 from lerobot.grad_project.rl.trainer import ReinFlowPPOTrainer
 from lerobot.policies import get_policy_class, make_pre_post_processors
-from lerobot.transport import services_pb2
+from lerobot.transport import services_pb2, services_pb2_grpc
 
 
 @dataclass
 class ReinFlowPolicyServerConfig(PolicyServerConfig):
     """Configuration for ReinFlow Online RL Policy Server."""
-    sigma: float = 0.05
-    rl_steps: int = 4
-    actor_lr: float = 3e-5
-    critic_lr: float = 1e-4
-    buffer_capacity: int = 1000
-    update_batch_size: int = 16
-    ppo_epochs: int = 4
-    save_interval_updates: int = 5
-    checkpoint_output_dir: str = "outputs/reinflow_smolvla_live"
+    sigma: float = field(default=0.05, metadata={"help": "Flow-SDE noise injection std"})
+    rl_steps: int = field(default=4, metadata={"help": "Flow-SDE denoising steps (fast 4-step)"})
+    actor_lr: float = field(default=3e-5, metadata={"help": "Actor learning rate"})
+    critic_lr: float = field(default=1e-4, metadata={"help": "Critic learning rate"})
+    buffer_capacity: int = field(default=1000, metadata={"help": "Rollout buffer capacity"})
+    update_batch_size: int = field(default=16, metadata={"help": "Transitions before PPO update"})
+    ppo_epochs: int = field(default=4, metadata={"help": "PPO optimization epochs"})
+    save_interval_updates: int = field(default=5, metadata={"help": "Updates between checkpoint saves"})
+    checkpoint_output_dir: str = field(default="outputs/reinflow_smolvla_live", metadata={"help": "Checkpoint dir"})
 
 
 class ReinFlowPolicyServer(PolicyServer):
