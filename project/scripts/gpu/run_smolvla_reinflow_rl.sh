@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LEROBOT_ROOT="${LEROBOT_ROOT:-$(cd -- "$SCRIPT_DIR/../../.." && pwd)}"
 
 CONDA_ENV="${CONDA_ENV:-lerobot}"
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-eslab1234/smolvla_task1_5blocks_v3_444ep_fullft_b16_150k_v1}"
 TARGET_COLOR="${TARGET_COLOR:-red}"
 NUM_EPISODES="${NUM_EPISODES:-20}"
 STEPS_PER_EPISODE="${STEPS_PER_EPISODE:-25}"

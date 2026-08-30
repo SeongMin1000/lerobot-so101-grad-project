@@ -99,7 +99,27 @@ def main():
 
     # Initialize Rollout Buffer, Reward Evaluator, and PPO Trainer
     buffer = ReinFlowRolloutBuffer(capacity=500, device=str(device))
-    reward_evaluator = AutoRewardEvaluator()
+    
+    target_verifier = None
+    if not args.mock:
+        try:
+            from lerobot.grad_project.perception.opencv_target_verifier import (
+                TargetOccupancyVerifier,
+                load_or_default_config,
+            )
+            tv_cfg_path = Path("project/config/target_verifier.json")
+            if tv_cfg_path.exists():
+                tv_cfg = load_or_default_config(tv_cfg_path)
+                target_verifier = TargetOccupancyVerifier(
+                    tv_cfg,
+                    config_path=tv_cfg_path,
+                    frame_color="bgr",
+                )
+                print("[REINFLOW] TargetOccupancyVerifier successfully loaded for real-robot auto reward.", flush=True)
+        except Exception as e:
+            print(f"[WARN] Failed to load TargetOccupancyVerifier ({e}). Using dense rewards only.", flush=True)
+
+    reward_evaluator = AutoRewardEvaluator(target_verifier=target_verifier)
     trainer = ReinFlowPPOTrainer(policy=policy, lr=args.actor_lr, critic_lr=args.critic_lr, num_denoising_steps=4)
 
     out_dir = Path(args.output_dir)
@@ -136,7 +156,7 @@ def main():
             reward, done, info = reward_evaluator.evaluate_step(
                 obs_dict=batch,
                 action_chunk=actions,
-                target_color="red",
+                target_color=args.target_color,
             )
             ep_reward += reward
             step_elapsed = time.perf_counter() - step_start
