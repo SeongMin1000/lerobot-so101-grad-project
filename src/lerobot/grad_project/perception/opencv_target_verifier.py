@@ -50,7 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # cells) so its horizontal detection regions are wider.
     "slot_layout": "two_rows_3_2",
     "slot_labels": ["blue", "wood", "green", "yellow", "red"],
-    "slot_inner_margin": 0.08,
+    "slot_inner_margin": 0.15,
 
     # Empty-board reference image. Capture it with the robot at observe pose and
     # all blocks outside the target.
@@ -62,15 +62,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "luma_threshold": 34.0,
     "luma_weight": 0.35,
 
-    # Binary-mask cleanup. Morphology is applied independently inside each
-    # slot so vertically adjacent blocks can never be merged before occupancy
-    # is evaluated.
+    # Binary-mask cleanup.
     "blur_kernel": 5,
     "morph_kernel": 5,
 
     # Slot occupancy test. Tune these using --debug.
-    "min_foreground_ratio": 0.055,
-    "min_largest_contour_area": 220.0,
+    "min_foreground_ratio": 0.08,
+    "min_largest_contour_area": 350.0,
+    "min_component_slot_overlap": 0.35,
 
     # A slot must show the same occupied state for this many frames before the
     # stable-check helper accepts it.
@@ -431,48 +430,61 @@ class TargetOccupancyVerifier:
         kernel_size = max(1, int(self.cfg.get("morph_kernel", 5)))
         kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
 
+        # 1. Clean foreground inside target area
+        cleaned_target = cv2.morphologyEx(target_foreground, cv2.MORPH_OPEN, kernel)
+        cleaned_target = cv2.morphologyEx(cleaned_target, cv2.MORPH_CLOSE, kernel)
+
+        # 2. Extract connected components (each candidate block)
+        num_labels, labels_im, stats, _ = cv2.connectedComponentsWithStats(
+            cleaned_target, connectivity=8
+        )
+
+        min_component_overlap = float(self.cfg.get("min_component_slot_overlap", 0.35))
+        exclusive_slot_fgs = [np.zeros_like(cleaned_target) for _ in self.slot_polygons]
+
+        # 3. Assign each block exclusively to the single slot with maximum overlap
+        for k in range(1, num_labels):
+            comp_area = stats[k, cv2.CC_STAT_AREA]
+            if comp_area < min_area * 0.4:
+                continue
+
+            comp_mask = (labels_im == k).astype(np.uint8) * 255
+            overlaps = [
+                int(cv2.countNonZero(cv2.bitwise_and(comp_mask, s_mask)))
+                for s_mask in slot_masks
+            ]
+            best_idx = int(np.argmax(overlaps))
+            best_overlap = overlaps[best_idx]
+
+            # Dominant assignment: only assign if largest overlap meets criteria
+            if best_overlap >= min_area and (best_overlap / max(1, comp_area)) >= min_component_overlap:
+                exclusive_slot_fgs[best_idx] = cv2.bitwise_or(
+                    exclusive_slot_fgs[best_idx],
+                    cv2.bitwise_and(comp_mask, slot_masks[best_idx])
+                )
+
         statuses = []
 
         for index, (
             label,
             polygon,
             slot_mask,
+            slot_fg,
         ) in enumerate(
             zip(
                 self.slot_labels,
                 self.slot_polygons,
                 slot_masks,
+                exclusive_slot_fgs,
                 strict=True,
             )
         ):
             slot_pixels = int(cv2.countNonZero(slot_mask))
-
-            # IMPORTANT: clip first, then clean. Adjacent rows are isolated
-            # before CLOSE can connect their blocks or shadows.
-            changed = cv2.bitwise_and(
-                target_foreground,
-                slot_mask,
-            )
-            changed = cv2.morphologyEx(
-                changed,
-                cv2.MORPH_OPEN,
-                kernel,
-            )
-            changed = cv2.morphologyEx(
-                changed,
-                cv2.MORPH_CLOSE,
-                kernel,
-            )
-            # Morphology can grow a few pixels beyond the polygon edge.
-            changed = cv2.bitwise_and(changed, slot_mask)
-
-            changed_pixels = int(
-                cv2.countNonZero(changed)
-            )
+            changed_pixels = int(cv2.countNonZero(slot_fg))
             ratio = changed_pixels / max(1, slot_pixels)
 
             slot_contours, _ = cv2.findContours(
-                changed,
+                slot_fg,
                 cv2.RETR_EXTERNAL,
                 cv2.CHAIN_APPROX_SIMPLE,
             )
@@ -591,8 +603,9 @@ class TargetOccupancyVerifier:
         return False, last_result
 
 
-def open_camera(device: str, width: int, height: int, fps: int, fourcc: str) -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+def open_camera(device: str | int, width: int, height: int, fps: int, fourcc: str) -> cv2.VideoCapture:
+    dev_target = int(device) if str(device).isdigit() else str(device)
+    cap = cv2.VideoCapture(dev_target, cv2.CAP_V4L2)
     if not cap.isOpened():
         raise RuntimeError(f"Failed to open camera: {device}")
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
@@ -672,6 +685,16 @@ def main() -> int:
             cfg["target_polygon"] = click_target_quad(frame)
             save_config(config_path, cfg)
             print(f"Saved target geometry to {config_path}")
+            det_path = config_path.parent / "detector.json"
+            if det_path.exists():
+                try:
+                    with det_path.open("r", encoding="utf-8") as f:
+                        det_cfg = json.load(f)
+                    det_cfg["target_polygon"] = cfg["target_polygon"]
+                    save_json_atomic(det_path, det_cfg)
+                    print(f"[OK] synced target_polygon to: {det_path}")
+                except Exception as e:
+                    print(f"[WARN] failed to sync detector.json: {e}")
 
         if args.capture_reference:
             if cfg.get("target_polygon") is None:

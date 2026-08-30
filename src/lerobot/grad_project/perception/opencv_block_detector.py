@@ -1660,13 +1660,14 @@ def click_polygon(
 
 
 def open_camera(
-    device: str,
+    device: str | int,
     width: int,
     height: int,
     fps: int,
     fourcc: str,
 ) -> cv2.VideoCapture:
-    capture = cv2.VideoCapture(device, cv2.CAP_V4L2)
+    dev_target = int(device) if str(device).isdigit() else str(device)
+    capture = cv2.VideoCapture(dev_target, cv2.CAP_V4L2)
     if not capture.isOpened():
         raise RuntimeError(f"failed to open camera: {device}")
     capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
@@ -1906,6 +1907,17 @@ def main() -> int:
         if changed:
             save_json_atomic(config_path, config)
             print(f"[OK] detector calibration saved: {config_path}")
+            if args.calibrate_target:
+                tv_path = config_path.parent / "target_verifier.json"
+                if tv_path.exists() and "target_polygon" in config:
+                    try:
+                        with tv_path.open("r", encoding="utf-8") as f:
+                            tv_cfg = json.load(f)
+                        tv_cfg["target_polygon"] = config["target_polygon"]
+                        save_json_atomic(tv_path, tv_cfg)
+                        print(f"[OK] synced target_polygon to: {tv_path}")
+                    except Exception as e:
+                        print(f"[WARN] failed to sync target_verifier.json: {e}")
             if args.exit_after_calibration:
                 return 0
 

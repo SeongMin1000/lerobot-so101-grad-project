@@ -65,38 +65,38 @@
   },
   "target_polygon": [
     [
-      234,
-      221
+      235,
+      225
     ],
     [
-      405,
-      223
+      409,
+      224
     ],
     [
       414,
-      294
+      303
     ],
     [
       226,
-      295
+      302
     ]
   ],
   "workspace_polygon": [
     [
-      23,
-      67
+      25,
+      68
     ],
     [
-      602,
-      71
+      611,
+      70
     ],
     [
-      634,
-      415
+      638,
+      425
     ],
     [
-      5,
-      416
+      3,
+      424
     ]
   ],
   "ignore_polygons": [
@@ -560,7 +560,7 @@
     "reject_large_unsplit_factor": 1.75,
     "reject_large_unsplit_above": 2800.0
   },
-  "background_captured_at": "2026-07-23T00:15:54",
+  "background_captured_at": "2026-08-30T23:26:26",
   "background_shape": [
     480,
     640,
