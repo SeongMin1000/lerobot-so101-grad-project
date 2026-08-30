@@ -25,16 +25,16 @@
     "yellow",
     "red"
   ],
-  "slot_inner_margin": 0.15,
+  "slot_inner_margin": 0.04,
   "reference_image": "../assets/opencv/target_empty_reference.png",
   "chroma_threshold": 16.0,
   "luma_threshold": 34.0,
   "luma_weight": 0.35,
   "blur_kernel": 5,
   "morph_kernel": 5,
-  "min_foreground_ratio": 0.08,
-  "min_largest_contour_area": 350.0,
+  "min_foreground_ratio": 0.035,
+  "min_largest_contour_area": 160.0,
   "stable_frames": 6,
   "slot_layout": "two_rows_3_2",
-  "min_component_slot_overlap": 0.35
+  "min_component_slot_overlap": 0.15
 }

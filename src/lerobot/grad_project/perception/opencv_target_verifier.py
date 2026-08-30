@@ -50,7 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # cells) so its horizontal detection regions are wider.
     "slot_layout": "two_rows_3_2",
     "slot_labels": ["blue", "wood", "green", "yellow", "red"],
-    "slot_inner_margin": 0.15,
+    "slot_inner_margin": 0.04,
 
     # Empty-board reference image. Capture it with the robot at observe pose and
     # all blocks outside the target.
@@ -67,9 +67,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "morph_kernel": 5,
 
     # Slot occupancy test. Tune these using --debug.
-    "min_foreground_ratio": 0.08,
-    "min_largest_contour_area": 350.0,
-    "min_component_slot_overlap": 0.35,
+    "min_foreground_ratio": 0.035,
+    "min_largest_contour_area": 160.0,
+    "min_component_slot_overlap": 0.15,
 
     # A slot must show the same occupied state for this many frames before the
     # stable-check helper accepts it.
@@ -445,7 +445,7 @@ class TargetOccupancyVerifier:
         # 3. Assign each block exclusively to the single slot with maximum overlap
         for k in range(1, num_labels):
             comp_area = stats[k, cv2.CC_STAT_AREA]
-            if comp_area < min_area * 0.4:
+            if comp_area < min_area * 0.3:
                 continue
 
             comp_mask = (labels_im == k).astype(np.uint8) * 255
@@ -457,7 +457,7 @@ class TargetOccupancyVerifier:
             best_overlap = overlaps[best_idx]
 
             # Dominant assignment: only assign if largest overlap meets criteria
-            if best_overlap >= min_area and (best_overlap / max(1, comp_area)) >= min_component_overlap:
+            if best_overlap >= min_area * 0.7:
                 exclusive_slot_fgs[best_idx] = cv2.bitwise_or(
                     exclusive_slot_fgs[best_idx],
                     cv2.bitwise_and(comp_mask, slot_masks[best_idx])
