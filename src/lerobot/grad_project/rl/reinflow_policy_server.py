@@ -197,10 +197,17 @@ class ReinFlowPolicyServer(PolicyServer):
                 )
 
             self._episode_step_count += 1
-            if self._episode_step_count % 10 == 0:
-                self.logger.info(
-                    f"[REINFLOW STEP {self._episode_step_count}] LogProb: {log_prob.item():.1f} | Rew: {reward:.3f} | V(s): {value_est:.2f} | Buffer: {len(self.rf_buffer)}/{self.rf_config.buffer_capacity}"
-                )
+            log_prob_val = log_prob.item() if isinstance(log_prob, torch.Tensor) else float(log_prob)
+            buf_len = len(self.rf_buffer) if self.rf_buffer is not None else 0
+            
+            # Print live ReinFlow step progress
+            self.logger.info(
+                f"[REINFLOW #{self._episode_step_count:03d}] "
+                f"LogProb: {log_prob_val:7.1f} | "
+                f"Reward: {reward:+6.3f} | "
+                f"V(s): {value_est:5.2f} | "
+                f"Buffer: {buf_len:02d}/{self.rf_config.update_batch_size:02d}"
+            )
 
             # 5. Trigger Online PPO Policy Update when buffer threshold reached
             if (
@@ -223,7 +230,9 @@ class ReinFlowPolicyServer(PolicyServer):
     def _run_ppo_update(self):
         """Executes PPO update on collected rollout transitions."""
         try:
-            self.logger.info("[REINFLOW RL] Starting Background PPO Optimization...")
+            self.logger.info("\n" + "=" * 65)
+            self.logger.info(">>> [REINFLOW ONLINE RL] Starting Background PPO Optimization...")
+            self.logger.info("=" * 65)
             update_start = time.perf_counter()
 
             # Compute Generalized Advantage Estimation (GAE)
@@ -240,22 +249,25 @@ class ReinFlowPolicyServer(PolicyServer):
             self._total_updates += 1
             elapsed = time.perf_counter() - update_start
 
+            save_dir = Path(self.rf_config.checkpoint_output_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            latest_path = save_dir / "reinflow_latest.pt"
+            torch.save(self.policy.state_dict(), str(latest_path))
+
             self.logger.info(
-                f"[REINFLOW RL UPDATE #{self._total_updates} COMPLETE in {elapsed:.2f}s] "
-                f"Policy Loss: {metrics.get('policy_loss', 0.0):.4f} | "
-                f"Value Loss: {metrics.get('value_loss', 0.0):.4f} | "
-                f"KL Divergence: {metrics.get('kl_divergence', 0.0):.4f}"
+                f"[REINFLOW PPO UPDATE #{self._total_updates} FINISHED in {elapsed:.2f}s]\n"
+                f"  • Policy Loss:    {metrics.get('policy_loss', 0.0):.4f}\n"
+                f"  • Value Loss:     {metrics.get('value_loss', 0.0):.4f}\n"
+                f"  • KL Divergence:  {metrics.get('kl_divergence', 0.0):.4f}\n"
+                f"  • Checkpoint:     {latest_path}\n"
+                + "=" * 65 + "\n"
             )
 
-            # Save checkpoint periodically
+            # Save numbered checkpoint periodically
             if self._total_updates % self.rf_config.save_interval_updates == 0:
-                save_dir = Path(self.rf_config.checkpoint_output_dir)
-                save_dir.mkdir(parents=True, exist_ok=True)
                 save_path = save_dir / f"reinflow_update_{self._total_updates:04d}.pt"
                 torch.save(self.policy.state_dict(), str(save_path))
-                latest_path = save_dir / "reinflow_latest.pt"
-                torch.save(self.policy.state_dict(), str(latest_path))
-                self.logger.info(f"[REINFLOW] Checkpoint saved: {save_path}")
+                self.logger.info(f"[REINFLOW] Periodic checkpoint saved: {save_path}")
 
         except Exception as e:
             self.logger.error(f"[REINFLOW RL] PPO Update Error: {e}", exc_info=True)
