@@ -85,7 +85,32 @@ bash project/scripts/robot/run_async_inference.sh
 ```
 - SmolVLA 선택 시 `ACTIONS_PER_CHUNK=20`, `MAX_RELATIVE_TARGET=1.25°`가 자동 적용됩니다.
 
-### 4.4 범용 Python CLI 직접 실행 템플릿 (참고용)
+### 4.4 HIL (DAgger) 모드 실행 (사람 개입 & 데이터셋 자동 수집)
+자율 주행 도중 사람이 리더 암으로 직접 개입하여 실패 복구/교정 궤적을 실시간으로 녹화·저장하는 모드입니다:
+
+```bash
+# 1) LeRobot 표준 CLI 플래그로 HIL 실행
+POLICY_TYPE=smolvla bash project/scripts/robot/run_async_inference.sh --hil
+
+# 2) 데이터셋 이름 및 에피소드 수 지정
+POLICY_TYPE=smolvla bash project/scripts/robot/run_async_inference.sh \
+  --strategy.type=dagger \
+  --dataset.repo_id="eslab1234/smolvla_hil_corrections_v1" \
+  --dataset.num_episodes=20
+
+# 3) 환경 변수 방식
+HIL=true POLICY_TYPE=smolvla bash project/scripts/robot/run_async_inference.sh
+```
+
+#### HIL 실시간 키보드 조작 가이드
+* **`[Space]` (일시정지)**: 모델 자율 주행 정지 ➡️ 리더 암이 팔로워의 현재 자세로 자동 스무스 정렬(동기화).
+* **`[Enter]` 또는 `[C]` (교정 시작)**: 리더 암 토크 해제 ➡️ 사람이 손으로 잡고 조작하며 데이터셋 프레임 녹화 시작.
+* **`[오른쪽 화살표 (→)]` (저장)**: 사람이 조작한 교정 구간을 1개 에피소드로 `LeRobotDataset`에 저장.
+* **`[왼쪽 화살표 (←)]` (삭제)**: 조작 실수가 발생한 경우 해당 교정 프레임들을 디스크에 쓰지 않고 버림.
+* **`[Space]` (자율 주행 재개)**: 모델을 다시 로드하지 않고, 현재 로봇 위치(Fresh Observation)부터 즉시 GPU 비동기 추론 재개.
+* **`[Q]` 또는 `[ESC]` (종료)**: 세션 종료 및 데이터셋 최종 확정 저장.
+
+### 4.5 범용 Python CLI 직접 실행 템플릿 (참고용)
 ```bash
 python -m lerobot.async_inference.robot_client \
   --server_address="${SERVER_ADDRESS:-100.85.69.64:8080}" \

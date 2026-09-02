@@ -1,0 +1,72 @@
+{
+  "affine_table_cm_to_robot_m": [
+    [
+      -0.05087252266747825,
+      1.0812561398131812,
+      0.2490212238038778
+    ],
+    [
+      1.108353287739449,
+      -0.10646712235070246,
+      -0.1018906685796465
+    ],
+    [
+      0.002286624220538411,
+      0.12614125464458623,
+      0.004194286613110818
+    ]
+  ],
+  "note": "robot_xyz_m = M @ [x_cm/100, y_cm/100, 1]. Refit 2026-08-27 from tcp_offset_probe.py results: robot was sent to the ORIGINAL calibration's predicted robot_xyz for each labelled point, then a human measured where the gripper ACTUALLY landed on the table (pencil mark + ruler, origin = tl corner). source_points below use that measured table position paired with the robot_xyz that was actually sent, so this fit absorbs the real TCP/orientation error empirically without needing to know its exact cause. Re-run the calibration wizard (or tcp_offset_probe.py again) if the camera mount, table, or robot base is moved.",
+  "source_points": [
+    {
+      "label": "center",
+      "table_x_cm": 11.0,
+      "table_y_cm": 2.5,
+      "robot_xyz_m": [
+        0.2717,
+        0.0146,
+        0.0077
+      ]
+    },
+    {
+      "label": "tl",
+      "table_x_cm": 2.0,
+      "table_y_cm": -1.5,
+      "robot_xyz_m": [
+        0.2331,
+        -0.0827,
+        0.0025
+      ]
+    },
+    {
+      "label": "tr",
+      "table_x_cm": 18.0,
+      "table_y_cm": -1.5,
+      "robot_xyz_m": [
+        0.2216,
+        0.1055,
+        0.0025
+      ]
+    },
+    {
+      "label": "br",
+      "table_x_cm": 20.3,
+      "table_y_cm": 6.5,
+      "robot_xyz_m": [
+        0.3102,
+        0.1119,
+        0.013
+      ]
+    },
+    {
+      "label": "bl",
+      "table_x_cm": 2.5,
+      "table_y_cm": 7.0,
+      "robot_xyz_m": [
+        0.3217,
+        -0.0763,
+        0.0129
+      ]
+    }
+  ]
+}

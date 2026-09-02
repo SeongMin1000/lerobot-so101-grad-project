@@ -22,8 +22,14 @@ table before -- see the issues log):
     already-physically-verified calibration corners, minus FLOOR_MARGIN_M.
     If a computed target would go below that, the descent stops early and
     prints a warning instead of continuing.
-  - Ctrl+C at any time stops the ramp immediately (each step is a separate
-    small motion, not one long blocking move).
+  - Ctrl+C is handled explicitly: it commands the arm to hold where it
+    physically is (cancelling the still-live servo goal, which otherwise keeps
+    driving the arm while Python unwinds) and leaves the reduced torque cap in
+    place rather than restoring it. Until 2026-09-01 this line claimed Ctrl+C
+    was safe while nothing caught KeyboardInterrupt at all -- it descends from
+    BaseException, so it skipped every handler, RESTORED full torque, and left
+    the arm pushing harder than before. Do not trust a documented safety
+    behaviour that has no handler behind it.
   - Keep a hand near the power switch / e-stop while running this. Watch
     the first descent closely before trusting later ones.
 
@@ -60,6 +66,10 @@ HOVER_M = 0.05  # hover 5cm above the computed table point before descending
 MAX_STEP_M = 0.005  # never descend more than 5mm per increment
 FLOOR_MARGIN_M = 0.003  # extra 3mm safety margin below the lowest known-safe Z
 GRIPPER_TOUCH_POS = 15.0  # degrees; nearly-closed, just enough to leave a clear mark -- adjust to your gripper
+# --gripper-pos lets us re-touch the SAME calibrated points with the gripper held OPEN
+# (as it actually is during new_pick_and_place.py's real descent) instead of nearly-closed,
+# to check whether the touch point itself shifts with gripper angle -- see issues log,
+# "그리퍼 열림/닫힘 상태에 따른 접촉점 편차" investigation.
 MAX_IK_ERR_M = 0.005  # abort (don't move) if IK didn't converge within 5mm of the requested target
 
 # Arm joints (everything except gripper) had NO overload-torque cap in the existing code --
@@ -106,6 +116,28 @@ DEFAULT_POINTS_CM = [
 ]
 
 
+def read_joints(robot) -> np.ndarray:
+    """The ONE way to learn where the arm really is -- never infer it from what
+    was last commanded (a max_relative_target clamp or a watchdog freeze makes
+    those two disagree). Same helper/rationale as new_pick_and_place.py."""
+    obs = robot.get_observation()
+    return np.array([float(obs[f"{n}.pos"]) for n in JOINT_ORDER])
+
+
+def halt_in_place(robot) -> None:
+    """Command the arm to hold exactly where it physically is right now.
+
+    Needed on Ctrl+C: the last send_action goal stays live in the servos and the
+    arm keeps driving toward it while the Python exception unwinds. Re-commanding
+    the present position cancels that without cutting torque (which would just
+    drop the arm). Same helper/rationale as new_pick_and_place.py."""
+    try:
+        here = read_joints(robot)
+        robot.send_action({f"{n}.pos": float(here[i]) for i, n in enumerate(JOINT_ORDER)})
+    except Exception as e:  # noqa: BLE001
+        print(f"!! 팔을 제자리에 정지시키지 못했습니다 ({e}) -- 아직 움직이면 전원을 차단하세요.")
+
+
 def ramp_to(robot, current: np.ndarray, target_joints: np.ndarray, steps: int = RAMP_STEPS) -> np.ndarray:
     for step in range(1, steps + 1):
         alpha = step / steps
@@ -117,7 +149,11 @@ def ramp_to(robot, current: np.ndarray, target_joints: np.ndarray, steps: int = 
         )
         time.sleep(1.0 / FPS)
     time.sleep(0.3)
-    return target_joints
+    # Return where the arm REALLY ended up, not the commanded target -- this
+    # script's whole output is a physical measurement, so silently substituting
+    # "what we asked for" wherever a clamp shortened a move would corrupt the
+    # very numbers being measured (see issues log 2026-09-01).
+    return read_joints(robot)
 
 
 def safe_descend(
@@ -138,29 +174,47 @@ def safe_descend(
             f"({floor_z * 1000:.1f}mm)보다 낮습니다. 하한선까지만 내려갑니다."
         )
 
+    # Pin the gripper for the whole descent. solve_to_position's output gripper
+    # component is whatever the IK solver produced, NOT necessarily the value
+    # passed in, so without this the gripper drifts a little on every descent
+    # step. That matters most for --gripper-pos: the entire point of that flag
+    # is measuring where the contact point lands at a KNOWN gripper angle, and
+    # a gripper that quietly drifts off 70deg mid-descent corrupts exactly the
+    # measurement being taken (see issues log 2026-09-01).
+    gripper_idx = JOINT_ORDER.index("gripper")
+    gripper_hold = current[gripper_idx]
     n_steps = max(1, int(abs(start_z - target_z) / MAX_STEP_M) + 1)
     for i in range(1, n_steps + 1):
         z = start_z + (target_z - start_z) * (i / n_steps)
         waypoint = np.array([xy_xyz[0], xy_xyz[1], z])
         solved, err = checked_solve(kin, current, waypoint, keep_orientation=orientation)
+        solved[gripper_idx] = gripper_hold
         current = ramp_to(robot, current, solved, steps=60)
         print(f"    하강 {i}/{n_steps}: z={z * 1000:.1f}mm (IK 오차 {err * 1000:.2f}mm)")
     return current
 
 
-def set_arm_overload_torque(robot, pct: int) -> dict[str, int]:
+def set_arm_overload_torque(robot, pct: int, previous: dict[str, int]) -> None:
     """Set Overload_Torque on every joint except the gripper (which already has its own
-    cap). Returns the previous per-motor values so the caller can restore them later.
+    cap). Fills caller-owned `previous` in AS WE GO -- rather than building+returning
+    its own dict -- so a mid-loop exception still leaves `previous` usable for
+    restore_arm_overload_torque(). The old version returned a fresh dict, which a raised
+    exception discarded entirely, leaving already-lowered motors stuck at pct% with no
+    way to restore them (see YOLO_하드코딩_개발_이슈정리.md, 2026-09-01).
     NOT verified on real hardware -- if `robot.bus.read`/`write` signatures differ, this
     will raise; check it works (e.g. read one value back) before trusting it in a real run.
     """
-    previous = {}
     for motor in robot.bus.motors:
         if motor == "gripper":
             continue
         previous[motor] = robot.bus.read("Overload_Torque", motor)
+        if previous[motor] == pct:
+            # A run that exited with the arm stalled deliberately leaves the cap
+            # on. If that message was missed, the arm stays weak forever after
+            # and `previous` now records the cap as if it were the original.
+            print(f"!! {motor}: 이미 Overload_Torque={pct}% 상태입니다 -- 이전 실행이 팔이 걸린 채 "
+                  f"종료했을 수 있습니다. 원래 값으로 되돌린 뒤 이 결과를 신뢰하세요.")
         robot.bus.write("Overload_Torque", motor, pct)
-    return previous
 
 
 def restore_overload_torque(robot, previous: dict[str, int]) -> None:
@@ -203,7 +257,16 @@ def main() -> None:
         help="Compute every IK target/error and print it. Does NOT connect to the robot or move anything. "
         "Run this FIRST and read the errors before ever running for real.",
     )
+    parser.add_argument(
+        "--gripper-pos",
+        type=float,
+        default=GRIPPER_TOUCH_POS,
+        help=f"Gripper angle (deg) to hold during touch, default {GRIPPER_TOUCH_POS} (nearly-closed). "
+        "Pass 70 (GRIPPER_OPEN_POS in new_pick_and_place.py) to check whether the touch point shifts "
+        "when the gripper is held open, as it is during a real pick's descent.",
+    )
     args = parser.parse_args()
+    gripper_touch_pos = args.gripper_pos
 
     if args.points:
         points = [(f"pt{i}", *map(float, p.split(","))) for i, p in enumerate(args.points)]
@@ -269,23 +332,25 @@ def main() -> None:
     robot = make_robot_from_config(config)
     robot.connect()
 
-    print(f"\n{len(points)}개 지점을 테스트합니다.")
+    print(f"\n{len(points)}개 지점을 테스트합니다. (그리퍼 각도: {gripper_touch_pos}도)")
     print("전원 스위치/비상정지 근처에 손을 두고, 첫 하강은 특히 자세히 지켜보세요.")
     print("각 지점에서 그리퍼가 닿으면, 실제 닿은 자리를 연필로 표시하고 Enter를 누르세요.\n")
 
-    prev_torque = None
+    prev_torque: dict[str, int] = {}
     try:
-        prev_torque = set_arm_overload_torque(robot, ARM_OVERLOAD_TORQUE_PCT)
+        set_arm_overload_torque(robot, ARM_OVERLOAD_TORQUE_PCT, prev_torque)
         print(f"팔 관절 토크를 임시로 {ARM_OVERLOAD_TORQUE_PCT}%로 낮췄습니다 (테스트 끝나면 원래대로 복원).")
     except Exception as e:  # noqa: BLE001
         print(f"!! 팔 토크 제한 설정 실패 ({e}) -- 이 안전장치 없이는 계속 진행하지 않습니다.")
+        if prev_torque:  # partial application happened before the failure -- undo it
+            restore_overload_torque(robot, prev_torque)
         robot.disconnect()
         sys.exit(1)
 
     results = []
+    stalled_on_exit = False  # set when we bail out with the arm possibly jammed
     try:
-        obs = robot.get_observation()
-        current = np.array([float(obs[f"{n}.pos"]) for n in JOINT_ORDER])
+        current = read_joints(robot)
         gripper_idx = JOINT_ORDER.index("gripper")
         # NOTE: do NOT overwrite current[gripper_idx] here. `current` must hold the REAL
         # observed gripper position so ramp_to's interpolation closes it gradually over
@@ -310,7 +375,7 @@ def main() -> None:
             # Only the ARM's target came from IK; the gripper target is ours to set. Setting
             # it on the SOLVED target (not on `current`) means ramp_to closes it gradually,
             # from wherever it really is right now, over the full ramp -- not in one jump.
-            solved_hover[gripper_idx] = GRIPPER_TOUCH_POS
+            solved_hover[gripper_idx] = gripper_touch_pos
             current = ramp_to(robot, current, solved_hover)
             print(f"  hover 도착 (IK 오차 {err_hover * 1000:.2f}mm)")
 
@@ -319,19 +384,35 @@ def main() -> None:
             input("  -> 실제 닿은 자리를 표시했으면 Enter (다음 지점으로 이동) ")
 
             solved_hover_back, _ = checked_solve(kin, current, hover_xyz, keep_orientation=orientation)
+            solved_hover_back[gripper_idx] = current[gripper_idx]  # same IK-gripper-drift pin as safe_descend
             current = ramp_to(robot, current, solved_hover_back)
             results.append((label, x_cm, y_cm))
 
     except (IKDivergedError, RuntimeError) as e:
         print(f"\n!! 안전장치 발동, 즉시 정지했습니다: {e}")
         print("지금까지 표시한 지점까지의 결과는 아래에서 유효합니다. 원인 파악 후 재시도하세요.")
+    except KeyboardInterrupt:
+        # KeyboardInterrupt is a BaseException, so it was NOT caught above --
+        # before 2026-09-01 Ctrl+C skipped every handler, hit `finally`, and
+        # RESTORED the full torque cap while the servos still held the last
+        # commanded goal. A person presses Ctrl+C because the arm is going
+        # somewhere wrong, so that path made a jam push HARDER. Halt the arm
+        # where it is and leave the reduced cap on.
+        stalled_on_exit = True
+        halt_in_place(robot)
+        print("\n!! 사용자가 중단했습니다 -- 팔을 현재 위치에 정지시켰습니다.")
+        print("   토크 상한은 낮춘 상태로 둡니다(팔이 뭔가에 걸려 있을 수 있으므로).")
     finally:
-        if prev_torque is not None:
-            try:
-                restore_overload_torque(robot, prev_torque)
-                print("팔 관절 토크를 원래 값으로 복원했습니다.")
-            except Exception as e:  # noqa: BLE001
-                print(f"!! 토크 복원 실패 ({e}) -- 다음 사용 전에 수동으로 확인하세요.")
+        if prev_torque:
+            if stalled_on_exit:
+                print(f"!! 팔 Overload_Torque를 {ARM_OVERLOAD_TORQUE_PCT}%로 낮춘 채 종료합니다 "
+                      f"(복원 안 함 -- 팔이 아직 걸려 있을 수 있음). 원래 값: {prev_torque}")
+            else:
+                try:
+                    restore_overload_torque(robot, prev_torque)
+                    print("팔 관절 토크를 원래 값으로 복원했습니다.")
+                except Exception as e:  # noqa: BLE001
+                    print(f"!! 토크 복원 실패 ({e}) -- 다음 사용 전에 수동으로 확인하세요.")
         robot.disconnect()
 
     print("\n=== 결과 ===")

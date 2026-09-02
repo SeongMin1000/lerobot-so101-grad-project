@@ -89,29 +89,67 @@ def main():
             result = detector.detect(frame)
             annotated = detector.draw(frame, result)
 
-            # Draw details
+            split_x_m = 0.32  # 32.0 cm boundary
             detected_str_list = []
+
+            # Draw ground-truth split line (X = 32cm) across image if homography is available
+            if grasp_homography is not None:
+                try:
+                    # Inverse homography to map robot (X=0.24, Y=-0.25) to (X=0.24, Y=0.25)
+                    inv_H = np.linalg.inv(grasp_homography)
+                    p_left_m = np.array([[[split_x_m, -0.25]]], dtype=np.float64)
+                    p_right_m = np.array([[[split_x_m, +0.25]]], dtype=np.float64)
+                    px_left = cv2.perspectiveTransform(p_left_m, inv_H)[0, 0]
+                    px_right = cv2.perspectiveTransform(p_right_m, inv_H)[0, 0]
+                    pt1 = (int(round(px_left[0])), int(round(px_left[1])))
+                    pt2 = (int(round(px_right[0])), int(round(px_right[1])))
+                    cv2.line(annotated, pt1, pt2, (0, 255, 255), 2)
+                    cv2.putText(
+                        annotated,
+                        f"--- SPLIT LINE: X = {split_x_m*100:.1f}cm (UPPER >= 24cm / LOWER < 24cm) ---",
+                        (max(10, pt1[0]), max(20, pt1[1] - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (0, 255, 255),
+                        1,
+                    )
+                except Exception:
+                    pass
+
             for b in result.blocks:
                 status = "IN" if b.in_target else "OUT"
                 if grasp_homography is not None:
                     pt = np.array([[[b.cx, b.cy]]], dtype=np.float64)
                     rx, ry = cv2.perspectiveTransform(pt, grasp_homography)[0, 0]
-                    # Convert to cm (record calibration is already ground-truth from ruler)
-                    offset = 0.0 if "record" in str(grasp_calib_path) else 0.015
-                    rx_cm, ry_cm = (rx + offset) * 100.0, (ry + offset) * 100.0
+                    rx_cm, ry_cm = rx * 100.0, ry * 100.0
                     r_dist_cm = float(np.hypot(rx_cm, ry_cm))
-                    too_close = " ⚠️[TOO CLOSE]" if r_dist_cm < 18.0 else ""
-                    detected_str_list.append(f"{b.color.upper()}({status}, X={rx_cm:.1f}cm, Y={ry_cm:.1f}cm, R={r_dist_cm:.1f}cm{too_close})")
+                    
+                    is_upper = (rx >= split_x_m)
+                    zone_label = "UPPER(FAR)" if is_upper else "LOWER(NEAR)"
+                    zone_color = (255, 255, 0) if is_upper else (0, 255, 0)
 
-                    # Overlay distance on image
+                    detected_str_list.append(
+                        f"{b.color.upper()}[{zone_label}]: X={rx_cm:.1f}cm, Y={ry_cm:+.1f}cm, R={r_dist_cm:.1f}cm"
+                    )
+
+                    # Overlay X, Y, and Zone on screen
                     bx, by, bw, bh = b.bbox
                     cv2.putText(
                         annotated,
-                        f"R={r_dist_cm:.1f}cm",
+                        f"X:{rx_cm:.1f}cm Y:{ry_cm:+.1f}cm",
+                        (bx, max(15, by - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (0, 255, 255),
+                        1,
+                    )
+                    cv2.putText(
+                        annotated,
+                        f"[{zone_label}]",
                         (bx, by + bh + 16),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.45,
-                        (0, 0, 255) if r_dist_cm < 18.0 else (0, 255, 255),
+                        zone_color,
                         1,
                     )
                 else:
@@ -121,7 +159,10 @@ def main():
             if current_time - last_save_time >= 1.0:
                 cv2.imwrite(str(output_snapshot), annotated)
                 last_save_time = current_time
-                print(f"[{time.strftime('%H:%M:%S')}] Found {len(result.blocks)} blocks: {', '.join(detected_str_list) if detected_str_list else 'None'}")
+                print(f"[{time.strftime('%H:%M:%S')}] Detected ({len(result.blocks)} blocks):")
+                for s in detected_str_list:
+                    print(f"   👉 {s}")
+                print("-" * 65)
 
             if has_gui:
                 cv2.imshow("YOLO Block Detection", annotated)
