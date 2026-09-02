@@ -222,3 +222,51 @@ python -m lerobot.scripts.lerobot_train \
 4. GPU에서 합성 관측값(Dummy Observation)을 넣어 1회 순전파(Forward pass) 에러 유무 확인.
 5. 검증 완료 후 `dataset-model-registry.md`에 결과 등록.
 
+---
+
+## 7. Offline Reinforcement Learning (Reward-Weighted Flow-Matching / AWAC)
+
+실물 로봇의 수동 리셋 피로도 없이, 정적 데이터셋(데모 450개 + HIL 복구 60개 + 실패 궤적)의 **보상 점수(Reward)에 비례하여 Loss 가중치를 부여하는 오프라인 강화학습**입니다.
+
+### 7.1 핵심 수식 및 원리
+LeRobot 공식 `sample_weighter` 및 `RewardSampleWeighter`([`src/lerobot/utils/sample_weighting.py`](file:///home/eslab/lerobot/src/lerobot/utils/sample_weighting.py))를 사용하여 각 배치 샘플의 Flow-Matching 손실에 지수 가중치를 곱합니다:
+
+$$\text{Weight} = \exp\left(\frac{\text{Reward} - \max(\text{Reward})}{\text{Temperature}}\right), \quad \mathcal{L}_{\text{Weighted}} = \frac{\sum_i w_i \cdot \mathcal{L}_{\text{Flow-MSE}}(i)}{\sum_i w_i}$$
+
+* **성공/HIL 복구 궤적 (Reward=1.0)**: 높은 가중치($w \approx 1.6$)로 핵심 정답 동작 강력 모방.
+* **부분 성공 궤적 (Reward=0.4~0.6)**: 부분 보상에 비례하여 약하게 학습.
+* **실패 궤적 (Reward=0.0)**: 가중치가 대폭 축소($w \approx 0.2$)되어 실패 동작 모방 억제.
+
+### 7.2 보상 점수표 생성 헬퍼
+데이터셋에 에피소드별 보상 점수를 매핑하는 JSON 파일 생성:
+```bash
+# 전체 에피소드에 기본 점수 1.0 부여 (필요 시 특정 에피소드 점수 수정)
+python project/scripts/tools/label_dataset_rewards.py \
+  --repo_id="eslab1234/smolvla_mixed_dataset" \
+  --output="project/config/episode_rewards.json" \
+  --default_reward=1.0
+```
+
+### 7.3 오프라인 RL 학습 실행 템플릿
+```bash
+python -m lerobot.scripts.lerobot_train \
+  --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
+  --dataset.image_transforms.enable=true \
+  --policy.type=smolvla \
+  --policy.chunk_size=60 \
+  --policy.n_action_steps=60 \
+  --policy.device=cuda \
+  --batch_size=16 \
+  --steps=150000 \
+  --sample_weighting.type=reward_weighted \
+  --sample_weighting.temperature=0.5 \
+  --sample_weighting.reward_map_path="project/config/episode_rewards.json" \
+  --output_dir="outputs/train/${RUN_NAME}" \
+  --job_name="${RUN_NAME}" \
+  --policy.push_to_hub=true \
+  --policy.repo_id="${HF_USER}/${RUN_NAME}"
+```
+- **`--sample_weighting.temperature`**: 작을수록(0.2~0.5) 1.0점 성공 궤적에 학습이 집중되며, 클수록 균등 학습(BC)에 가까워짐.
+- **체크포인트 호환성**: 학습된 모델은 아키텍처 변경이 없으므로 `run_async_inference.sh`에서 100% 그대로 즉시 실행 가능.
+
+
