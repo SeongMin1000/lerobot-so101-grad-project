@@ -57,18 +57,27 @@ from lerobot.robots.so_follower import SO101FollowerConfig
 TEST_POINT_CM = (8.0, -3.0)
 WRIST_ANGLES_DEG = [0.0, -150.0, -100.0, -50.0, 50.0, 100.0, 150.0]
 GRIPPER_MARK_POS = 15.0          # nearly closed: one clean mark, not two jaw prints
-ARM_TORQUE_PCT = 20
-TRACK_ERR_DEG, TRACK_GRACE = 10.0, 3
+# 70, not the 20 that tcp_offset_probe.py uses. 20% was copied over from that
+# tool and is simply not enough for this arm to lift itself out of the folded
+# observe pose -- measured 2026-09-01: shoulder_lift has to swing 60-95deg
+# against gravity to reach any hover, and at 20% it manages about half the
+# commanded travel, so the watchdog stops the run on the very first move. The
+# tracking watchdog below is what actually guards this test.
+ARM_TORQUE_PCT = 70
+TRACK_ERR_DEG, TRACK_GRACE = 15.0, 2
 
 
 def build_targets():
     kin = load_kinematics()
     calib = load_calibration("project/config/table_robot_calibration.json")
     pitch = GraspPitchModel.load()
-    floor_z = npp.floor_z_from_calibration(calib)
-
     x_cm, y_cm = TEST_POINT_CM
     target = apply_table_to_robot(x_cm, y_cm, calib)
+    # Tight clamp anchored to THIS target, same as pick_one_block uses. The
+    # global one is a loose backstop and the target-zone-corner version this
+    # started with sat 0.9mm under the target, which refused the descent's own
+    # last step for dipping the ~4mm a joint-space ramp naturally dips.
+    floor_z = npp.local_floor_z(target, npp.floor_z_from_calibration(calib))
     reach = float(np.linalg.norm(target[:2]))
     tilt = pitch.tilt_for(reach) if pitch else 0.0
     azimuth = float(np.degrees(np.arctan2(target[1], target[0])))
@@ -88,7 +97,7 @@ def main() -> None:
 
     print(f"측정 지점: table {TEST_POINT_CM}cm -> robot {np.round(target, 4)}")
     print(f"  reach {reach*100:.1f}cm, tilt {tilt:.1f}도, floor_z {floor_z*1000:.1f}mm")
-    print(f"  손목 각도 {len(WRIST_ANGLES_DEG)}개: {[int(a) for a in WRIST_ANGLES_DEG]}\n")
+    print(f"  기준 자세에서의 회전각 {len(WRIST_ANGLES_DEG)}개: {[int(a) for a in WRIST_ANGLES_DEG]}\n")
 
     plan = []
     for ang in WRIST_ANGLES_DEG:
@@ -104,7 +113,10 @@ def main() -> None:
             print(f"  손목 {ang:+.0f}도 : 계산 실패, 건너뜀 ({str(e).splitlines()[0][:60]})")
             continue
         plan.append((ang, ori, q_hover, q_turn))
-        print(f"  손목 {ang:+.0f}도 : OK (IK 오차 {err*1000:.2f}mm)")
+        # `ang` is a turn RELATIVE to the nominal grasp orientation, which already
+        # carries the azimuth correction -- so "+0" is not wrist_roll=0. Print the
+        # actual joint value too, or the labels look wrong at the robot.
+        print(f"  회전 {ang:+.0f}도 (wrist_roll {q_turn[4]:+.1f}도) : OK (IK 오차 {err*1000:.2f}mm)")
 
     if len(plan) < 4:
         print("\n!! 쓸 수 있는 각도가 4개 미만입니다. 원을 못 맞춥니다. 중단.")
@@ -127,15 +139,26 @@ def main() -> None:
     stalled = False
     try:
         npp.set_arm_overload_torque(robot, ARM_TORQUE_PCT, prev_torque)
+        if any(v != 80 for v in prev_torque.values()):
+            print(f"!! 시작 전 토크가 이미 {prev_torque} 였습니다 -- 이전 실행이 비정상 종료한 흔적입니다.")
+            print("   끝난 뒤 80으로 되돌려야 합니다.")
         print(f"팔 토크를 {ARM_TORQUE_PCT}%로 낮췄습니다 (끝나면 복원).\n")
         current = npp.read_joints(robot)
 
         for i, (ang, ori, q_hover, q_turn) in enumerate(plan, 1):
-            print(f"[{i}/{len(plan)}] 손목 {ang:+.0f}도")
+            print(f"[{i}/{len(plan)}] 기준에서 {ang:+.0f}도 회전 (wrist_roll {q_turn[4]:+.1f}도)")
             q_hover = q_hover.copy(); q_hover[npp.GRIPPER_IDX] = args.gripper_pos
-            current = npp.ramp_to(robot, current, q_hover, npp.RAMP_STEPS, False)
+            back_steps = max(npp.RAMP_STEPS, int(abs(q_hover[4] - current[4]) * 2))
+            current = npp.ramp_to(robot, current, q_hover, back_steps, False)
             q_turn = q_turn.copy(); q_turn[npp.GRIPPER_IDX] = args.gripper_pos
-            current = npp.ramp_to(robot, current, q_turn, 60, False)
+            # Size the turn by how far the wrist has to go. new_pick_and_place.py
+            # folds its wrist angle to +-45deg and 60 steps is plenty there, but
+            # this test deliberately sweeps +-150deg -- 150deg in 60 steps is
+            # 75deg/s, and wrist_roll fell 18deg behind and tripped the watchdog.
+            # 2 steps per degree holds it near 15deg/s whatever the angle.
+            turn_steps = max(60, int(abs(q_turn[4] - current[4]) * 2))
+            print(f"   손목 {current[4]:.0f} -> {q_turn[4]:.0f}도 ({turn_steps}스텝, {turn_steps/npp.FPS:.1f}초)")
+            current = npp.ramp_to(robot, current, q_turn, turn_steps, False)
             current = npp.safe_descend(kin, robot, current, target, floor_z, ori, False,
                                        gripper_goal=args.gripper_pos)
             input(f"   -> 닿은 자리에 '{i}' 이라고 적고 Enter ")
@@ -161,7 +184,7 @@ def main() -> None:
     print("그 변을 따라가는 방향을 x, 로봇에서 멀어지는 방향을 y 로 해서 (cm 단위)")
     print("표시한 점들의 좌표를 알려주세요:\n")
     for i, (ang, *_rest) in enumerate(plan, 1):
-        print(f"  {i}번 (손목 {ang:+.0f}도) : x = ____ cm,  y = ____ cm")
+        print(f"  {i}번 (회전 {ang:+.0f}도) : x = ____ cm,  y = ____ cm")
     print("\n이 점들이 그리는 원의 반지름과 방향이 곧 TCP 편차입니다.")
 
 

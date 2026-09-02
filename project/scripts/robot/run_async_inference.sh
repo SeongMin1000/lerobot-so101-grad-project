@@ -46,6 +46,8 @@ CLI_MAX_CORRECTION_SECONDS="${MAX_CORRECTION_SECONDS:-${EPISODE_TIME_S:-30}}"
 CLI_PUSH_TO_HUB="${PUSH_TO_HUB:-false}"
 CLI_RESUME="${RESUME:-false}"
 
+CLI_RECORD_MODE="${RECORD_MODE:-full_on_intervention}"
+
 # Parse command-line options
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,6 +60,10 @@ while [[ $# -gt 0 ]]; do
       if [[ "$val" == "dagger" ]]; then
         CLI_HIL="true"
       fi
+      shift
+      ;;
+    --record_mode=*|--record-mode=*)
+      CLI_RECORD_MODE="${1#*=}"
       shift
       ;;
     --dataset.repo_id=*|--dataset_repo_id=*)
@@ -206,6 +212,7 @@ ENCODER_THREADS="${ENCODER_THREADS:-2}"
 PLAY_SOUNDS="${PLAY_SOUNDS:-false}"
 SERVER_RPC_TIMEOUT_S="${SERVER_RPC_TIMEOUT_S:-3.0}"
 LEADER_HANDOVER_DURATION_S="${LEADER_HANDOVER_DURATION_S:-1.2}"
+RECORD_MODE="${CLI_RECORD_MODE:-full_on_intervention}"
 
 DEBUG_OBSERVATION_DIR="${DEBUG_OBSERVATION_DIR:-$LEROBOT_ROOT/var/debug/hil_client_camera_inputs}"
 DEBUG_OBSERVATION_LIMIT="${DEBUG_OBSERVATION_LIMIT:-1}"
@@ -362,6 +369,7 @@ if [[ "$HIL_ENABLED" == "true" ]]; then
     --leader_handover_duration_s="$LEADER_HANDOVER_DURATION_S" \
     --leader_handover_fps="$FPS" \
     --dataset.repo_id="$DATASET_REPO_ID" \
+    --record_mode="$RECORD_MODE" \
     --dataset.single_task="$TASK" \
     --dataset.num_episodes="$NUM_CORRECTIONS" \
     --dataset.episode_time_s="$MAX_CORRECTION_SECONDS" \

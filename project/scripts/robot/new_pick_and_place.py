@@ -652,8 +652,46 @@ TABLE_CORNERS_CM = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
 
 
 def floor_z_from_calibration(calib) -> float:
-    zs = [apply_table_to_robot(x, y, calib)[2] for x, y in TABLE_CORNERS_CM]
+    """Lowest table height anywhere the arm is allowed to work, minus a margin.
+
+    This used to take the minimum over the TARGET ZONE's four corners only. But
+    the fitted table is not level -- z rises with table y (about 0.8mm per cm) --
+    and blocks live on the ROBOT side of the zone, at negative y, where the table
+    is LOWER than any zone corner. So the clamp sat above the very targets it was
+    supposed to protect: at table (8,-3) the grasp point is 26.6mm and the clamp
+    was 25.7mm, 0.9mm of headroom, and the descent got refused for dipping 3mm
+    under it. Every near-side block had the same problem, which is a short
+    descent and a missed grasp rather than an obvious error.
+
+    Take the minimum over the whole allowed workspace instead, so the clamp sits
+    under the lowest point the arm can legitimately be asked to reach. That makes
+    it a loose backstop -- it only catches a grossly wrong z -- so each pick and
+    each drop also derives a TIGHT local clamp from its own target (see
+    local_floor_z), which is what actually guards the descent."""
+    xs = TABLE_X_RANGE_CM
+    ys = TABLE_Y_RANGE_CM
+    corners = [(x, y) for x in xs for y in ys]
+    zs = [apply_table_to_robot(x, y, calib)[2] for x, y in corners]
     return min(zs) - FLOOR_MARGIN_M
+
+
+# Slack under a specific target for its own descent. Has to cover the dip a
+# joint-space ramp makes between two poses that are both fine on their own --
+# measured at ~4mm on a 5mm descent step -- with a little room to spare. Smaller
+# than this and safe_descend refuses its own last step; much larger and the
+# clamp stops being a clamp.
+LOCAL_FLOOR_SLACK_M = 0.010
+
+
+def local_floor_z(target_xyz: np.ndarray, global_floor_z: float) -> float:
+    """Clamp for one target: just under the table where THAT target sits.
+
+    A single number for the whole table cannot be both safe and useful, because
+    the fitted surface is not level -- it runs from about -15mm at one corner of
+    the workspace to +60mm at another. Anchoring the clamp to the target's own
+    height keeps it tight everywhere. Never let it rise above the global floor's
+    intent, and never above the target itself."""
+    return min(float(target_xyz[2]) - LOCAL_FLOOR_SLACK_M, max(global_floor_z, float(target_xyz[2]) - LOCAL_FLOOR_SLACK_M))
 
 
 def set_arm_p_gain(robot, gain: int) -> None:
@@ -789,6 +827,7 @@ def pick_one_block(
                                                   model_tilt + 30.0, model_tilt + 40.0)
                                       if t <= MAX_TILT_DEG]
 
+    floor_z = local_floor_z(target_xyz, floor_z)
     solved_hover = solved_turn = None
     last_err: IKDivergedError | None = None
     for tilt_deg in tilt_candidates:
@@ -861,6 +900,7 @@ def pick_one_block(
         drop_tilt = pitch_model.tilt_for(float(np.linalg.norm(drop_xyz[:2]))) if pitch_model else 0.0
         drop_orientation = orientation_from_tilt(drop_xyz, drop_tilt)
         drop_hover = drop_xyz + np.array([0.0, 0.0, HOVER_M])
+        floor_z = local_floor_z(drop_xyz, floor_z)
 
         print(f"  carrying to drop slot ({drop_x_cm:.0f},{drop_y_cm:.0f})cm...")
         solved_drop_hover, _ = checked_solve(kin, current, drop_hover, floor_z=floor_z, keep_orientation=drop_orientation)

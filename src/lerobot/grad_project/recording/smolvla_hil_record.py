@@ -86,7 +86,7 @@ from .smolvla_record_observe_return import (
 )
 
 
-HIL_RECORDER_BUILD = "2026-08-06-remote-smolvla-corrections-only-v1"
+HIL_RECORDER_BUILD = "2026-09-02-remote-smolvla-full-trial-hil-v2"
 
 
 @dataclass
@@ -103,6 +103,8 @@ class HILRecordConfig(ObserveRecordConfig):
     aggregate_fn_name: str = "latest_only"
     server_rpc_timeout_s: float = 3.0
 
+    record_mode: str = "full_on_intervention"  # "full_on_intervention" | "corrections_only"
+
     leader_handover_duration_s: float = 1.2
     leader_handover_fps: int = 30
     paused_poll_hz: int = 100
@@ -118,6 +120,8 @@ class HILRecordConfig(ObserveRecordConfig):
             raise ValueError("--server_address must not be empty")
         if not self.pretrained_name_or_path.strip():
             raise ValueError("--pretrained_name_or_path must name the deployed SmolVLA checkpoint")
+        if self.record_mode not in {"full_on_intervention", "corrections_only"}:
+            raise ValueError("--record_mode must be 'full_on_intervention' or 'corrections_only'")
         if self.actions_per_chunk < 2:
             raise ValueError("HIL resume requires --actions_per_chunk >= 2")
         if not 0 <= self.chunk_size_threshold <= 1:
@@ -132,6 +136,7 @@ class HILRecordConfig(ObserveRecordConfig):
             raise ValueError("--paused_poll_hz must be greater than 0")
         if self.dataset.episode_time_s <= 0:
             raise ValueError("--dataset.episode_time_s is the correction timeout and must be positive")
+
 
 
 class HILPhase(str, enum.Enum):
@@ -464,15 +469,14 @@ def _wait_for_trial_ready(
         print("ENTER만 누르거나 q를 입력하세요.")
 
 
-def _print_active_controls() -> None:
+def _print_active_controls(record_mode: str = "full_on_intervention") -> None:
     print()
-    print("[HIL CONTROLS - terminal focus required]")
-    print("  SPACE       autonomous pause/resume")
-    print("  ENTER or C  paused 상태에서 human correction 시작")
-    print("  →           correction 저장 (expert window 1 episode)")
-    print("  ←           현재 correction 완전 폐기")
-    print("  N           현재 physical trial 종료 -> observe 복귀")
-    print("  Q or ESC    즉시 종료; 미저장 correction 폐기, 자동복귀 없음")
+    print(f"[HIL CONTROLS - {record_mode.upper()} - terminal focus required]")
+    print("  SPACE       autonomous pause/resume (일시정지 후 리더암 자동 정렬 / 재개)")
+    print("  ENTER or C  paused 상태에서 human correction 시작 / 종료 (토크 해제)")
+    print("  → (또는 N)   trial 완료 (사람 개입 있었으면 전체 시퀀스 저장, 없었으면 자동 폐기)")
+    print("  ←           현재 trial 전체 즉시 폐기 및 재시도")
+    print("  Q or ESC    즉시 종료; 미저장 데이터 폐기")
     print()
 
 
@@ -503,13 +507,13 @@ class HILSession:
 
         self.phase = HILPhase.PAUSED
         self.saved_corrections = 0
+        self.has_intervened = False
+        self.is_trial_recording = False
         self._correction_started_at: float | None = None
         self._expected_episode_index: int | None = None
 
     def _pause_and_align(self) -> None:
         print("\n[INTERVENE] Flushing policy chunks and freezing follower...")
-        # The physical hold comes first: a slow or failed network RPC must not
-        # delay replacing the last policy goal with the measured position.
         follower_pose = _hold_follower_at_measured_position(self.robot)
         self.client.pause_policy_control()
         follower_pose = _hold_follower_at_measured_position(self.robot)
@@ -536,15 +540,18 @@ class HILSession:
         print("[AUTONOMOUS] fresh observation부터 policy 재개")
 
     def _start_correction(self) -> None:
-        if self.dataset.has_pending_frames() or _pending_frame_count(self.dataset) != 0:
-            raise RuntimeError("Cannot start correction: an unexpected dataset frame buffer is not empty")
-        self._expected_episode_index = self.dataset.num_episodes
-        self._correction_started_at = time.perf_counter()
+        if self.cfg.record_mode == "corrections_only":
+            if self.dataset.has_pending_frames() or _pending_frame_count(self.dataset) != 0:
+                raise RuntimeError("Cannot start correction: an unexpected dataset frame buffer is not empty")
+            self._expected_episode_index = self.dataset.num_episodes
+            self._correction_started_at = time.perf_counter()
+
+        self.has_intervened = True
         _disable_leader_torque(self.teleop)
         self.phase = HILPhase.CORRECTING
         print(
-            "[CORRECTING + RECORDING] recovery -> 올바른 접근/파지/배치. "
-            "완료 후 → 저장, 실패하면 ← 폐기"
+            "[CORRECTING + RECORDING] recovery/correction 조작 중... "
+            "SPACE=자율 주행 재개 / →=trial 완료 / ←=폐기"
         )
 
     def _discard_pending_correction(self, reason: str) -> None:
@@ -558,26 +565,34 @@ class HILSession:
             )
         self._expected_episode_index = None
         self._correction_started_at = None
+        self.has_intervened = False
+        self.is_trial_recording = False
 
-    def _finish_correction(self, *, save: bool) -> bool:
+    def _finish_trial(self, *, save: bool) -> TrialOutcome:
         if self._expected_episode_index is None:
-            raise RuntimeError("Correction bookkeeping is not initialized")
+            return TrialOutcome.NEXT
 
         _enable_leader_hold_at_current_pose(self.teleop)
         _hold_follower_at_measured_position(self.robot)
 
         if not save:
-            self._discard_pending_correction("left arrow pressed during HIL correction")
+            self._discard_pending_correction("trial manually discarded by user with left arrow")
             self.phase = HILPhase.PAUSED
-            print("[PAUSED] correction discarded. SPACE=policy resume / ENTER=retry / N=next trial")
-            return False
+            print("[PAUSED] trial discarded. Preparing next trial...")
+            return TrialOutcome.NEXT
+
+        if self.cfg.record_mode == "full_on_intervention" and not self.has_intervened:
+            self._discard_pending_correction("trial completed without intervention (autonomous success)")
+            self.phase = HILPhase.PAUSED
+            print("✨ [DISCARDED] 사람이 개입하지 않고 자율 주행으로 성공한 에피소드이므로 저장하지 않고 폐기합니다.")
+            return TrialOutcome.NEXT
 
         frame_count = _pending_frame_count(self.dataset)
         if frame_count <= 0:
-            self._discard_pending_correction("right arrow pressed before any correction frame")
+            self._discard_pending_correction("trial finished before any frame recorded")
             self.phase = HILPhase.PAUSED
-            print("[NOT SAVED] empty correction. ENTER 또는 C로 다시 시작")
-            return False
+            print("[NOT SAVED] empty trial.")
+            return TrialOutcome.NEXT
 
         expected = self._expected_episode_index
         self.dataset.save_episode()
@@ -589,18 +604,50 @@ class HILSession:
         self.saved_corrections += 1
         self._expected_episode_index = None
         self._correction_started_at = None
+        self.has_intervened = False
+        self.is_trial_recording = False
         self.phase = HILPhase.PAUSED
         print(
-            f"[HIL SAVED] dataset episode {self.dataset.num_episodes - 1} | "
-            f"frames={frame_count} | session {self.saved_corrections}/{self.cfg.dataset.num_episodes}"
+            f"🎉 [HIL SAVED] 사람이 개입해 교정한 풀 시퀀스 에피소드 {self.dataset.num_episodes - 1} 저장 완료! | "
+            f"총 프레임수={frame_count} | 진행도: {self.saved_corrections}/{self.cfg.dataset.num_episodes}"
         )
-        return self.saved_corrections >= self.cfg.dataset.num_episodes
+        if self.saved_corrections >= self.cfg.dataset.num_episodes:
+            return TrialOutcome.TARGET_REACHED
+        return TrialOutcome.NEXT
 
     def _autonomous_tick(self) -> None:
+        performed_action = None
         if self.client.actions_available():
-            self.client.control_loop_action()
+            performed_action = self.client.control_loop_action()
         if self.client._ready_to_send_observation():
             self.client.control_loop_observation(self.cfg.dataset.single_task)
+
+        if self.cfg.record_mode == "full_on_intervention" and self.is_trial_recording and performed_action is not None:
+            observation = self.robot.get_observation()
+            processed_observation = self.robot_observation_processor(observation)
+            observation_frame = build_dataset_frame(
+                self.dataset.features,
+                processed_observation,
+                prefix=OBS_STR,
+            )
+            action_frame = build_dataset_frame(
+                self.dataset.features,
+                performed_action,
+                prefix=ACTION,
+            )
+            self.dataset.add_frame(
+                {
+                    **observation_frame,
+                    **action_frame,
+                    "task": self.cfg.dataset.single_task,
+                }
+            )
+            if self.cfg.display_data:
+                log_rerun_data(
+                    observation=processed_observation,
+                    action=performed_action,
+                    compress_images=self.display_compressed_images,
+                )
 
     def _correction_tick(self) -> None:
         observation = self.robot.get_observation()
@@ -638,57 +685,53 @@ class HILSession:
 
     def _handle_command(self, command: HILCommand) -> TrialOutcome | None:
         if command is HILCommand.STOP:
-            if self.phase is HILPhase.CORRECTING:
+            if self.phase is HILPhase.CORRECTING or self.is_trial_recording:
                 self._discard_pending_correction("HIL stop requested")
             self._pause_without_leader_motion()
             print("[STOP] Automatic observe return skipped for safety")
             return TrialOutcome.STOP
 
-        if command is HILCommand.NEXT_TRIAL:
-            if self.phase is HILPhase.CORRECTING:
-                print("[IGNORED] correction 중에는 먼저 → 저장 또는 ← 폐기하세요")
-                return None
-            self._pause_without_leader_motion()
-            return TrialOutcome.NEXT
+        if command is HILCommand.NEXT_TRIAL or command is HILCommand.SAVE_CORRECTION:
+            return self._finish_trial(save=True)
+
+        if command is HILCommand.DISCARD_CORRECTION:
+            return self._finish_trial(save=False)
 
         if command is HILCommand.TOGGLE_POLICY:
             if self.phase is HILPhase.AUTONOMOUS:
                 self._pause_and_align()
             elif self.phase is HILPhase.PAUSED:
                 self._resume_autonomous()
-            else:
-                print("[IGNORED] correction 중에는 먼저 → 저장 또는 ← 폐기하세요")
+            elif self.phase is HILPhase.CORRECTING:
+                _enable_leader_hold_at_current_pose(self.teleop)
+                _hold_follower_at_measured_position(self.robot)
+                self._resume_autonomous()
             return None
 
         if command is HILCommand.START_CORRECTION:
             if self.phase is HILPhase.PAUSED:
                 self._start_correction()
+            elif self.phase is HILPhase.CORRECTING:
+                _enable_leader_hold_at_current_pose(self.teleop)
+                _hold_follower_at_measured_position(self.robot)
+                self.phase = HILPhase.PAUSED
+                print("[PAUSED] correction pause. SPACE=자율주행 재개 / →=trial 완료 / ←=폐기")
             elif self.phase is HILPhase.AUTONOMOUS:
                 print("[IGNORED] 먼저 SPACE로 policy를 정지하세요")
-            else:
-                print("[IGNORED] 이미 correction을 기록 중입니다")
-            return None
-
-        if command is HILCommand.SAVE_CORRECTION:
-            if self.phase is not HILPhase.CORRECTING:
-                print("[IGNORED] 저장할 correction이 없습니다")
-                return None
-            if self._finish_correction(save=True):
-                return TrialOutcome.TARGET_REACHED
-            return None
-
-        if command is HILCommand.DISCARD_CORRECTION:
-            if self.phase is not HILPhase.CORRECTING:
-                print("[IGNORED] 폐기할 correction이 없습니다")
-                return None
-            self._finish_correction(save=False)
             return None
 
         raise RuntimeError(f"Unhandled HIL command: {command}")
 
     def run_trial(self) -> TrialOutcome:
+        self.has_intervened = False
+        self._expected_episode_index = self.dataset.num_episodes
+        if self.cfg.record_mode == "full_on_intervention":
+            self.is_trial_recording = True
+        else:
+            self.is_trial_recording = False
+
         self._resume_autonomous()
-        _print_active_controls()
+        _print_active_controls(self.cfg.record_mode)
 
         with TerminalKeyReader() as keys:
             while True:
@@ -700,14 +743,17 @@ class HILSession:
                         return outcome
 
                 if self.phase is HILPhase.CORRECTING:
-                    assert self._correction_started_at is not None
-                    elapsed = time.perf_counter() - self._correction_started_at
-                    if elapsed >= self.cfg.dataset.episode_time_s:
-                        _enable_leader_hold_at_current_pose(self.teleop)
-                        _hold_follower_at_measured_position(self.robot)
-                        self._discard_pending_correction("HIL correction time limit reached")
-                        self.phase = HILPhase.PAUSED
-                        print("[TIMEOUT] correction discarded; follower/leader hold in PAUSED")
+                    if self.cfg.record_mode == "corrections_only":
+                        assert self._correction_started_at is not None
+                        elapsed = time.perf_counter() - self._correction_started_at
+                        if elapsed >= self.cfg.dataset.episode_time_s:
+                            _enable_leader_hold_at_current_pose(self.teleop)
+                            _hold_follower_at_measured_position(self.robot)
+                            self._discard_pending_correction("HIL correction time limit reached")
+                            self.phase = HILPhase.PAUSED
+                            print("[TIMEOUT] correction discarded; follower/leader hold in PAUSED")
+                        else:
+                            self._correction_tick()
                     else:
                         self._correction_tick()
                 elif self.phase is HILPhase.AUTONOMOUS:
