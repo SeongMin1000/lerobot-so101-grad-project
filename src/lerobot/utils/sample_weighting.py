@@ -83,11 +83,16 @@ class SampleWeightingConfig:
     contains additional type-specific parameters.
 
     Attributes:
-        type: Weighting strategy type ("rabc", "uniform", etc.)
+        type: Weighting strategy type ("reward_weighted", "rabc", "uniform", etc.)
         progress_path: Path to precomputed progress values (for RABC)
         head_mode: Which model head to use for progress ("sparse" or "dense")
         kappa: Hard threshold for high-quality samples (RABC-specific)
         epsilon: Small constant for numerical stability
+        temperature: Temperature parameter for reward-weighted exponential loss (Offline RL / AWR / AWAC)
+        reward_map_path: Optional path to JSON file mapping episode index -> reward float
+        default_reward: Default reward score if not found in batch or map
+        min_weight: Minimum weight clamp threshold
+        max_weight: Maximum weight clamp threshold
         extra_params: Additional type-specific parameters passed to the weighter
     """
 
@@ -96,6 +101,11 @@ class SampleWeightingConfig:
     head_mode: str = "sparse"
     kappa: float = 0.01
     epsilon: float = 1e-6
+    temperature: float = 0.5
+    reward_map_path: str | None = None
+    default_reward: float = 1.0
+    min_weight: float = 0.0
+    max_weight: float = 100.0
     # Additional type-specific params can be added here or passed via extra_params
     extra_params: dict = field(default_factory=dict)
 
@@ -122,6 +132,9 @@ def make_sample_weighter(
     if config is None:
         return None
 
+    if config.type in {"reward_weighted", "reward", "awac", "offline_rl"}:
+        return RewardSampleWeighter(config=config, device=device)
+
     if config.type == "rabc":
         return _make_rabc_weighter(config, policy, device, dataset_root, dataset_repo_id)
 
@@ -129,7 +142,10 @@ def make_sample_weighter(
         # No-op weighter that returns uniform weights
         return UniformWeighter(device=device)
 
-    raise ValueError(f"Unknown sample weighting type: '{config.type}'. Supported types: 'rabc', 'uniform'")
+    raise ValueError(
+        f"Unknown sample weighting type: '{config.type}'. "
+        f"Supported types: 'reward_weighted', 'rabc', 'uniform'"
+    )
 
 
 def _make_rabc_weighter(
@@ -237,3 +253,95 @@ class UniformWeighter(SampleWeighter):
     def get_stats(self) -> dict:
         """Return empty stats for uniform weighting."""
         return {"type": "uniform"}
+
+
+class RewardSampleWeighter(SampleWeighter):
+    """
+    Sample weighter for Offline RL / Advantage-Weighted Regression (AWR / AWAC / Reward-Weighted Flow-Matching).
+
+    Computes per-sample weights based on episodic or per-frame reward:
+        weights = exp(reward / temperature)
+    and normalizes them across the batch so that the sum equals batch_size.
+
+    Supports:
+    1. Direct 'reward' field in batch dictionary (e.g. batch['reward']).
+    2. Episode-based reward lookup from a JSON file (reward_map_path) using batch['episode_index'].
+    3. Fallback default reward (default_reward, e.g. 1.0 for demonstration datasets).
+    """
+
+    def __init__(
+        self,
+        config: SampleWeightingConfig,
+        device: torch.device,
+    ):
+        self.config = config
+        self.device = device
+        self.temperature = max(config.temperature, 1e-4)
+        self.epsilon = config.epsilon
+        self.min_weight = config.min_weight
+        self.max_weight = config.max_weight
+        self.default_reward = config.default_reward
+        self.reward_map: dict[int, float] = {}
+
+        if config.reward_map_path:
+            import json
+            import logging
+            reward_path = Path(config.reward_map_path)
+            if reward_path.exists():
+                with open(reward_path, "r", encoding="utf-8") as f:
+                    raw_data = json.load(f)
+                    self.reward_map = {int(k): float(v) for k, v in raw_data.items()}
+                logging.info("RewardSampleWeighter: loaded %d episode rewards from %s", len(self.reward_map), reward_path)
+            else:
+                logging.warning("RewardSampleWeighter: reward map path %s not found; fallback to default_reward=%s", reward_path, self.default_reward)
+
+    def compute_batch_weights(self, batch: dict) -> tuple[torch.Tensor, dict]:
+        batch_size = self._determine_batch_size(batch)
+
+        if "reward" in batch and isinstance(batch["reward"], torch.Tensor):
+            rewards = batch["reward"].to(self.device, dtype=torch.float32).view(-1)
+        elif "episode_index" in batch and self.reward_map:
+            ep_indices = batch["episode_index"].cpu().view(-1).tolist()
+            rewards = torch.tensor(
+                [self.reward_map.get(int(ep), self.default_reward) for ep in ep_indices],
+                device=self.device,
+                dtype=torch.float32,
+            )
+        else:
+            rewards = torch.full((batch_size,), self.default_reward, device=self.device, dtype=torch.float32)
+
+        # Exponential reward weighting (Advantage / Return weighted)
+        # Shift rewards by max in batch for numerical stability in exp
+        shifted_rewards = (rewards - rewards.max()) / self.temperature
+        raw_weights = torch.exp(shifted_rewards)
+
+        if self.min_weight > 0.0 or self.max_weight < float("inf"):
+            raw_weights = torch.clamp(raw_weights, min=self.min_weight, max=self.max_weight)
+
+        # Normalize weights so they sum to batch_size
+        weight_sum = raw_weights.sum() + self.epsilon
+        normalized_weights = raw_weights * (batch_size / weight_sum)
+
+        stats = {
+            "type": "reward_weighted",
+            "mean_reward": rewards.mean().item(),
+            "min_reward": rewards.min().item(),
+            "max_reward": rewards.max().item(),
+            "mean_weight": normalized_weights.mean().item(),
+            "min_weight": normalized_weights.min().item(),
+            "max_weight": normalized_weights.max().item(),
+        }
+        return normalized_weights, stats
+
+    def _determine_batch_size(self, batch: dict) -> int:
+        for key in ["action", "index", "episode_index", "observation.state"]:
+            if key in batch and isinstance(batch[key], torch.Tensor):
+                return batch[key].shape[0]
+        for value in batch.values():
+            if isinstance(value, torch.Tensor) and value.ndim >= 1:
+                return value.shape[0]
+        return 1
+
+    def get_stats(self) -> dict:
+        return {"type": "reward_weighted", "temperature": self.temperature}
+
