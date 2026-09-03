@@ -185,7 +185,7 @@ python -m lerobot.scripts.lerobot_train \
 ## 5. Resume vs Pretrained Continuation (이어서 학습하는 2가지 전략)
 
 ### Strategy A: 로컬 체크포인트 완전 복원 (`--resume=true`)
-로컬 머신에 이전 학습 체크포인트 폴더가 온전히 보존되어 있을 때 사용:
+로컬 머신에서 중단된 학습을 동일한 조건으로 끝까지 재개할 때 사용:
 
 ```bash
 python -m lerobot.scripts.lerobot_train \
@@ -195,29 +195,64 @@ python -m lerobot.scripts.lerobot_train \
   --save_freq=10000 \
   --wandb.enable=true
 ```
-- **주의 (Known Error)**: LeRobot 0.5.2에서 `--resume=true` 사용 시 반드시 `--config_path`에 이전 체크포인트의 `train_config.json` 전체 경로를 지정해야 함 (누락 시 `ValueError: A config_path is expected when resuming a run` 발생).
-- **특징**: 옵티마이저 모멘텀, LR 스케줄러 상태, 데이터로더 샘플러 순서까지 100% 복원되어 이전 스텝 번호부터 이어서 진행됨.
+* 🚨 **치명적 주의 (10만 스텝 유령 학습 참사 방지)**:
+  - 15만 스텝으로 완료된 모델에서 스텝만 늘려 `--resume=true --steps=250000`으로 돌리면, **스케줄러 감쇄가 이미 15만 스텝에서 끝나버렸기 때문에 이후 10만 스텝(150,001~250,000) 내내 학습률이 최저치인 `1e-6` (0.000001)으로 바닥에 굳은 채 실행**됩니다.
+  - AdamW에서 LR `1e-6`은 가중치가 전혀 갱신되지 않는 사실상의 "동결(Freeze)" 상태이므로, 추가 10만 스텝 동안 Loss가 단 0.001도 떨어지지 않는 원인이 됩니다.
+  - 따라서 단순 학습 중단 복구가 아니라 **"체크포인트 기반 추가 학습"을 할 때는 무조건 아래 Strategy B를 사용**해야 합니다.
 
-### Strategy B: Hub 가중치 기반 이어서 학습 (`--policy.pretrained_path`) — 권장
-HuggingFace Hub에 업로드된 체크포인트 가중치를 로드하여 새 세션으로 추가 Epoch/Step을 학습할 때 사용:
+---
 
-```bash
-python -m lerobot.scripts.lerobot_train \
-  --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
-  --policy.type=act \
-  --policy.pretrained_path="${HF_USER}/${BASE_MODEL_NAME}" \
-  --policy.repo_id="${HF_USER}/${NEW_RUN_NAME}" \
-  --output_dir="outputs/train/${NEW_RUN_NAME}" \
-  --job_name="${NEW_RUN_NAME}" \
-  --batch_size=16 \
-  --steps=100000 \
-  --save_freq=10000 \
-  --wandb.enable=true \
-  --wandb.project=lerobot \
-  --policy.push_to_hub=true
-```
-- **주의 (Known Error)**: 베이스 모델 설정에 `push_to_hub: true`가 포함되어 있을 경우, 새 허브 ID(`--policy.repo_id`)를 지정하거나 `--policy.push_to_hub=false`를 명시해야 함 (누락 시 `ValueError: 'repo_id' argument missing` 발생).
-- **특징**: 이전 5만 스텝 가중치가 즉시 로드되어 초반 Loss가 낮은 상태(예: L1 Loss 0.06~0.08)에서 바로 시작되며, 추가 10만 스텝 완료 시 실질적으로 총 15만 스텝의 누적 효과를 가짐.
+### Strategy B: Hub/로컬 가중치 기반 신규 세션 파인튜닝 (`--policy.pretrained_path`) — 🌟 강력 권장
+이전 체크포인트 가중치를 시작점으로 삼아, **싱싱한 새 학습률 스케줄러(Warmup $\to$ Cosine Decay)를 부여하여 추가 Epoch를 학습**시키는 정석 방법입니다:
+
+#### 📌 필수 하이퍼파라미터 세팅 규칙
+> **핵심 원칙**: 추가 학습 세션에서는 **반드시 `--steps`와 `--policy.scheduler_decay_steps`를 1:1로 동일하게 일치**시키고, 기존 가중치 충격 방지를 위해 **짧은 웜업(1000~2000 스텝)**을 부여해야 합니다.
+
+1. **케이스 1: 기존 데이터셋으로 더 정밀하게 다듬을 때 (Fine Polish)**
+   - 기존 지식을 유지하며 미세 수렴할 수 있도록 **학습률을 절반(`1e-5`)으로 낮추고 짧게 웜업**:
+   ```bash
+   python -m lerobot.scripts.lerobot_train \
+     --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
+     --dataset.image_transforms.enable=true \
+     --dataset.image_transforms.max_num_transforms=3 \
+     --policy.type=smolvla \
+     --policy.chunk_size=50 \
+     --policy.n_action_steps=50 \
+     --policy.pretrained_path="${HF_USER}/${BASE_MODEL_NAME}" \
+     --policy.optimizer_lr=1e-5 \
+     --policy.scheduler_warmup_steps=1000 \
+     --policy.scheduler_decay_steps=50000 \
+     --steps=50000 \
+     --output_dir="outputs/train/${NEW_RUN_NAME}" \
+     --job_name="${NEW_RUN_NAME}" \
+     --save_freq=10000 \
+     --wandb.enable=true \
+     --policy.push_to_hub=true \
+     --policy.repo_id="${HF_USER}/${NEW_RUN_NAME}"
+   ```
+
+2. **케이스 2: 신규 에피소드(추가 데이터셋)를 얹어서 계속 학습할 때 (Continued Training)**
+   - 새 데이터를 적극적으로 흡수해야 하므로 **기존 학습률(`2e-5`)을 유지**하고 스텝 수에 맞게 스케줄러를 재설정:
+   ```bash
+   python -m lerobot.scripts.lerobot_train \
+     --dataset.repo_id="${HF_USER}/${NEW_DATASET_NAME}" \
+     --dataset.image_transforms.enable=true \
+     --dataset.image_transforms.max_num_transforms=3 \
+     --policy.type=smolvla \
+     --policy.chunk_size=50 \
+     --policy.n_action_steps=50 \
+     --policy.pretrained_path="${HF_USER}/${BASE_MODEL_NAME}" \
+     --policy.optimizer_lr=2e-5 \
+     --policy.scheduler_warmup_steps=2000 \
+     --policy.scheduler_decay_steps=100000 \
+     --steps=100000 \
+     --output_dir="outputs/train/${NEW_RUN_NAME}" \
+     --job_name="${NEW_RUN_NAME}" \
+     --save_freq=15000 \
+     --wandb.enable=true \
+     --policy.push_to_hub=true \
+     --policy.repo_id="${HF_USER}/${NEW_RUN_NAME}"
+   ```
 
 ---
 

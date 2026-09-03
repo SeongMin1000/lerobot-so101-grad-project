@@ -65,10 +65,12 @@ Read before acting:
   1. 🚨 **위치 왜곡 이미지 증강(`RandomAffine`) 사용**: LeRobot의 기본 증강에 포함된 `RandomAffine`(회전 ±5°, 이동 ±5%)은 카메라는 움직이지만 액션 라벨은 제자리이므로, 2cm 블록 기준으로 1~2cm의 인위적인 공간 라벨 노이즈를 주입함. 아무리 스텝을 늘려도(25만 스텝) Loss가 0.05에서 정체되고 실물 파지 시 1~2cm 빗겨남.
   2. **Chunk Size 60 확장**: 60스텝(2.0초) 장기 예측은 후반부 누적 분산과 오차가 커서 파지 순간의 위치 정밀도가 떨어짐.
   3. **학습 Epoch 부족(Underfitting)**: 대규모 데이터셋(단일 태스크 45만+ 프레임, 멀티태스크 75만+ 프레임)에서 최소 5~8 Epoch 이상 반복 학습되지 않은 경우.
+  4. 🚨 **`--resume=true`로 추가 학습 시 스케줄러 만료(LR 1e-6 굳음)**: 15만 스텝 완료 모델에서 `--resume=true --steps=250000`으로 돌리면 스케줄러가 이미 감쇄 완료되어 추가 10만 번 동안 LR이 1e-6으로 정체됨 (가중치 갱신이 멈춘 채 헛바퀴 돎).
 * **해결책**:
   - **이미지 위치 왜곡 차단**: `--dataset.image_transforms.enable=false` 적용 (330ep 성공 모델의 핵심 세팅. 조명 대응 필요 시 위치 왜곡 없는 `ColorJitter`만 유지).
   - **Chunk Size 50 통일**: `--policy.chunk_size=50 --policy.n_action_steps=50`으로 복원하여 단기 정밀 수렴 유도.
   - **유효 Epochs 확보**: 단일 태스크 15만 스텝(5+ Epochs), 멀티태스크는 태스크당 최소 5 Epochs(총 30만+ 스텝) 확보.
+  - **이어서 학습 시 `--policy.pretrained_path` 사용**: `--resume=true` 대신 이전 가중치를 베이스로 로드하고 `--policy.scheduler_decay_steps`를 추가 스텝과 1:1로 맞춘 새 세션으로 학습.
 
 ---
 
