@@ -40,7 +40,9 @@ Read before acting:
    - **관측된 결과**: 444ep 모델을 25만 스텝까지 학습해도 Loss가 0.05 아래로 떨어지지 않고, 실물 로봇에서 블록을 딱 1~2cm 빗겨나가 헛손질(Grasp Miss)하게 됩니다. 반면 증강이 꺼진 330ep 모델은 Loss 0.03 달성 및 정밀 파지에 성공했습니다.
 2. **공식 권장 플래그**:
    - **기본 권장 (가장 안전)**: 이미지 증강 완전 비활성화 (`--dataset.image_transforms.enable=false`)
-   - **조명 변화 대응 필요 시**: 물체 위치가 변하지 않는 **색상/조명 증강(`ColorJitter`: Brightness, Contrast, Saturation, Hue, Sharpness)만 사용**하고, 기하학적 변환(`RandomAffine`)은 반드시 제외합니다.
+   - **조명 변화 대응 필요 시 (색상 전용 증강)**: 
+     [`src/lerobot/transforms/transforms.py`](file:///home/eslab/lerobot/src/lerobot/transforms/transforms.py) 기본값에서 위치 왜곡(`affine`)이 이미 비활성화(주석 처리)되어 있으므로, 아래 옵션을 주면 **자동으로 안전한 색상 5종(`brightness`, `contrast`, `saturation`, `hue`, `sharpness`)만 활성화**됩니다:
+     `--dataset.image_transforms.enable=true --dataset.image_transforms.max_num_transforms=3`
 
 ### 2.2 [필수] Train / Validation 분할 및 검증(Val Loss) 규칙
 모델의 과적합(Overfitting)을 조기에 감지하고 최적의 일반화 체크포인트를 선별하기 위해 **데이터셋 분할 및 검증을 필수로 적용**합니다:
