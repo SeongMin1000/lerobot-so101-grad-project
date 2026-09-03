@@ -30,6 +30,7 @@ LEROBOT_ROOT="${LEROBOT_ROOT:-$(cd -- "$SCRIPT_DIR/../../.." && pwd)}"
 CLI_MODEL_PATH="${MODEL_PATH:-}"
 CLI_POLICY_TYPE="${POLICY_TYPE:-}"
 CLI_TASK="${TASK:-}"
+CLI_TASK_MODE="${TASK_MODE:-1}"
 CLI_ACTIONS_PER_CHUNK="${ACTIONS_PER_CHUNK:-}"
 CLI_CHUNK_SIZE_THRESHOLD="${CHUNK_SIZE_THRESHOLD:-}"
 CLI_AGGREGATE_FN_NAME="${AGGREGATE_FN_NAME:-}"
@@ -72,6 +73,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dataset.single_task=*|--task=*)
       CLI_TASK="${1#*=}"
+      shift
+      ;;
+    --task_mode=*|--task-mode=*)
+      CLI_TASK_MODE="${1#*=}"
       shift
       ;;
     --dataset.num_episodes=*|--num_episodes=*|--num_corrections=*)
@@ -145,16 +150,27 @@ fi
 export LEROBOT_RUNTIME_CONFIG="$RUNTIME_CONFIG"
 
 # Policy selection & smart defaults
-if [[ -z "$CLI_POLICY_TYPE" && -n "$MODEL_PATH" ]]; then
-  if [[ "$MODEL_PATH" =~ smolvla|smol_vla ]]; then
+if [[ -z "$CLI_POLICY_TYPE" && -n "${MODEL_PATH:-}" ]]; then
+  if [[ "${MODEL_PATH:-}" =~ smolvla|smol_vla ]]; then
     POLICY_TYPE="smolvla"
-  elif [[ "$MODEL_PATH" =~ act ]]; then
+  elif [[ "${MODEL_PATH:-}" =~ act ]]; then
     POLICY_TYPE="act"
   fi
 fi
 POLICY_TYPE="${POLICY_TYPE:-act}"
 SERVER_ADDRESS="${SERVER_ADDRESS:-100.85.69.64:8080}"
-TASK="${TASK:-Pick and place 5 blocks in sequence (red, yellow, wood, green, blue).}"
+
+TASK1_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then place each at the target area."
+TASK2_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then hover over and stack each at the target area."
+
+TASK_MODE="${CLI_TASK_MODE:-1}"
+if [[ -n "$CLI_TASK" ]]; then
+  TASK="$CLI_TASK"
+elif [[ "$TASK_MODE" =~ ^(2|task2|stack)$ ]]; then
+  TASK="$TASK2_PROMPT"
+else
+  TASK="$TASK1_PROMPT"
+fi
 
 if [[ "$POLICY_TYPE" == "act" ]]; then
   MODEL_PATH="${MODEL_PATH:-eslab1234/task1_hybrid_5blocks_v3_223ep_merged_act_b16_150k_v2}"
@@ -248,6 +264,7 @@ printf '========================================================================
 printf 'Mode:           %s\n' "$([[ "$HIL_ENABLED" == "true" ]] && printf 'Human-in-the-Loop (DAgger Data Collection)' || printf 'Autonomous Inference')"
 printf 'Model:          %s\n' "$MODEL_PATH"
 printf 'Policy Type:    %s\n' "$POLICY_TYPE"
+printf 'Task Mode:      %s (%s)\n' "$TASK_MODE" "$([[ "$TASK_MODE" =~ ^(2|task2|stack)$ ]] && printf 'Task 2: Stacking' || printf 'Task 1: Placement')"
 printf 'Task:           %s\n' "$TASK"
 printf 'Server:         %s\n' "$SERVER_ADDRESS"
 printf 'Cameras:        top=%s (/dev/cam_top), wrist=%s (/dev/cam_wrist)\n' "$TOP_KEY" "$WRIST_KEY"
