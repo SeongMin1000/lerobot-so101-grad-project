@@ -210,12 +210,25 @@ SKIP_CONFIRM="${SKIP_CONFIRM:-false}"
 
 # HIL Specific Configurations
 HF_USER="${HF_USER:-eslab1234}"
+
+# Smart default dataset name synchronized with TASK_MODE
+DEFAULT_DATASET_NAME="${POLICY_TYPE}_task1_hil_v1"
+if [[ "$TASK_MODE" =~ ^(2|task2|stack)$ ]]; then
+  DEFAULT_DATASET_NAME="${POLICY_TYPE}_task2_hil_v1"
+fi
+
 if [[ -z "$CLI_DATASET_REPO_ID" ]]; then
   if [[ -n "$CLI_DATASET_NAME" ]]; then
-    DATASET_REPO_ID="${HF_USER}/${CLI_DATASET_NAME}"
+    ACTUAL_DATASET_NAME="$CLI_DATASET_NAME"
+    # Auto-synchronize if TASK_MODE is 1 but name contains task2 (from lingering terminal export), or vice versa
+    if [[ ! "$TASK_MODE" =~ ^(2|task2|stack)$ && "$ACTUAL_DATASET_NAME" =~ task2 ]]; then
+      ACTUAL_DATASET_NAME="${ACTUAL_DATASET_NAME/task2/task1}"
+    elif [[ "$TASK_MODE" =~ ^(2|task2|stack)$ && "$ACTUAL_DATASET_NAME" =~ task1 ]]; then
+      ACTUAL_DATASET_NAME="${ACTUAL_DATASET_NAME/task1/task2}"
+    fi
+    DATASET_REPO_ID="${HF_USER}/${ACTUAL_DATASET_NAME}"
   else
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    DATASET_REPO_ID="${HF_USER}/${POLICY_TYPE}_hil_corrections_${TIMESTAMP}"
+    DATASET_REPO_ID="${HF_USER}/${DEFAULT_DATASET_NAME}"
   fi
 else
   DATASET_REPO_ID="$CLI_DATASET_REPO_ID"
