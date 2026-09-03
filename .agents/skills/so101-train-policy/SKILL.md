@@ -31,10 +31,16 @@ Read before acting:
    - 단일 Rename Processor(`top -> camera1, wrist -> camera2`)가 체크포인트와 함께 저장되는지 확인.
 4. 관절 각도(`observation.state`) 및 액션(`action`) 피처의 차원, 단위, 정규화 통계(stats) 확인.
 
-### 2.1 [필수] 이미지 증강 (Image Augmentation) 기본 적용
-실제 환경의 조명 변화, 그림자, 카메라 시야각 편차에 대한 정책 강인성(Robustness)을 위해 **모든 모델 학습 시 이미지 증강을 무조건 활성화**합니다:
-- 플래그: `--dataset.image_transforms.enable=true --dataset.image_transforms.max_num_transforms=3`
-- 내장 증강 내용: Brightness (0.8~1.2), Contrast (0.8~1.2), Saturation (0.5~1.5), Hue (-0.05~0.05), Sharpness (0.5~1.5), RandomAffine (±5°, translate ±5%).
+### 2.1 [필수] 이미지 증강 (Image Augmentation) 규칙: 색상 증강만 허용, 위치 왜곡(RandomAffine) 절대 금지
+로봇 모방 학습에서 이미지 증강은 **반드시 물체의 물리적 좌표를 왜곡하지 않는 범위** 내에서만 적용해야 합니다:
+
+1. 🚨 **위치 왜곡(RandomAffine) 절대 금지 (Loss 0.05 정체 & 1~2cm 빗겨남의 주원인)**:
+   - LeRobot의 이미지 증강 파이프라인은 **카메라 영상만 왜곡하고 모터 액션 라벨(`action`)은 보정하지 않습니다**.
+   - `RandomAffine`(회전 ±5°, 이동 ±5%)을 켜면 480×640 영상에서 2cm 블록이 약 24~32px(실물 1~2cm) 이동하지만 액션은 원래 좌표를 가리켜 **인위적인 공간 라벨 노이즈(Aleatoric Noise)**가 주입됩니다.
+   - **관측된 결과**: 444ep 모델을 25만 스텝까지 학습해도 Loss가 0.05 아래로 떨어지지 않고, 실물 로봇에서 블록을 딱 1~2cm 빗겨나가 헛손질(Grasp Miss)하게 됩니다. 반면 증강이 꺼진 330ep 모델은 Loss 0.03 달성 및 정밀 파지에 성공했습니다.
+2. **공식 권장 플래그**:
+   - **기본 권장 (가장 안전)**: 이미지 증강 완전 비활성화 (`--dataset.image_transforms.enable=false`)
+   - **조명 변화 대응 필요 시**: 물체 위치가 변하지 않는 **색상/조명 증강(`ColorJitter`: Brightness, Contrast, Saturation, Hue, Sharpness)만 사용**하고, 기하학적 변환(`RandomAffine`)은 반드시 제외합니다.
 
 ### 2.2 [필수] Train / Validation 분할 및 검증(Val Loss) 규칙
 모델의 과적합(Overfitting)을 조기에 감지하고 최적의 일반화 체크포인트를 선별하기 위해 **데이터셋 분할 및 검증을 필수로 적용**합니다:
@@ -58,9 +64,9 @@ Read before acting:
 - **Batch Size**: 16 (RTX 3090 24GB 기준 VRAM ~1GB 미만으로 매우 가벼움)
 - **Steps**: **100,000 ~ 150,000 steps** (기본 10만~15만 스텝 권장)
 - **Optimizer**: AdamW, Learning Rate **`1e-4`** (또는 `1e-5`), Weight Decay `1e-4`
-- **Action Chunk (고정)**: **`--policy.chunk_size=60 --policy.n_action_steps=60`** (60스텝으로 통일 고정)
+- **Action Chunk (고정)**: **`--policy.chunk_size=50 --policy.n_action_steps=50`** (50스텝으로 통일 고정)
 - **체크포인트 저장 주기**: `save_freq=10000` (1만 스텝마다 저장)
-- **이미지 증강**: `--dataset.image_transforms.enable=true` (기본 활성화)
+- **이미지 증강**: `--dataset.image_transforms.enable=false` (위치 왜곡 방지를 위해 기본 OFF 권장)
 
 ### 3.2 Steps ↔ Epochs 계산 법칙 (과소적합 방지)
 로봇 모방 학습은 수십만 스텝이라는 단순 수치가 아닌 **"데이터셋을 몇 번 반복(Epoch) 학습했는가"**를 기준으로 판단해야 합니다.
@@ -89,11 +95,10 @@ ACT는 CVAE 회귀 방식이므로 Total Loss에 속지 말고 **`L1 Loss`**를 
 ```bash
 python -m lerobot.scripts.lerobot_train \
   --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
-  --dataset.image_transforms.enable=true \
-  --dataset.image_transforms.max_num_transforms=3 \
+  --dataset.image_transforms.enable=false \
   --policy.type=act \
-  --policy.chunk_size=60 \
-  --policy.n_action_steps=60 \
+  --policy.chunk_size=50 \
+  --policy.n_action_steps=50 \
   --policy.device=cuda \
   --output_dir="outputs/train/${RUN_NAME}" \
   --job_name="${RUN_NAME}" \
@@ -121,7 +126,7 @@ python -m lerobot.scripts.lerobot_train \
   - `--policy.freeze_vision_encoder=false` (비전 인코더 동결 완전 해제)
   - `--policy.train_expert_only=false` (VLM 백본 전체 학습)
   - `--policy.train_state_proj=true` (관절 프로젝션 레이어 학습)
-- **Action Chunk (고정)**: **`--policy.chunk_size=60 --policy.n_action_steps=60`** (60스텝으로 통일 고정)
+- **Action Chunk (고정)**: **`--policy.chunk_size=50 --policy.n_action_steps=50`** (검증된 50스텝으로 통일 고정)
 - **Steps**: **150,000 steps** (30만~45만 프레임 기준 약 5.2~5.5 Epochs 달성)
 - **Batch Size**: 16 (RTX 3090 24GB 기준 VRAM 최적화)
 - **Optimizer & LR**:
@@ -129,7 +134,7 @@ python -m lerobot.scripts.lerobot_train \
 - **Scheduler**:
   - Cosine Decay with Warmup: Warmup `3000` steps, Decay `150000` steps, Decay LR `1e-6`
 - **체크포인트 저장 주기**: `save_freq=15000` (1.5만 스텝마다 저장, 총 10개 체크포인트)
-- **이미지 증강**: `--dataset.image_transforms.enable=true` (기본 활성화)
+- **이미지 증강**: `--dataset.image_transforms.enable=false` (위치 왜곡 RandomAffine 방지를 위해 기본 OFF 권장)
 
 *(참고: 빠른 실험용 LoRA 학습 시에는 `--policy.use_peft=true --peft.r=64 --peft.lora_alpha=64 --policy.freeze_vision_encoder=true --policy.optimizer_lr=3e-4 --steps=40000` 사용)*
 
@@ -141,17 +146,18 @@ SmolVLA는 Flow Matching (확률 흐름 생성) 모델이므로 L1/KLD 대신 **
 3. **`losses_after_rm_padding` (3단계 차원 패딩 제거)**: 최대 32개 모터 차원 중 SO-101의 미사용 모터 축(6축 초과분)을 제거한 유효 오차.
 4. **`loss` (최종 핵심 모니터링 지표)**:
    - 모든 패딩을 제거하고 실제 6축 모터의 유효 타임스텝에 대해 계산된 **진짜 Flow Matching MSE 손실**입니다.
-   - W&B에서 **`train/loss`** 및 **`val/loss`**가 부드럽게 우하향하는지 집중 모니터링합니다.
+   - **Loss 기준치 해석**:
+     - `0.03 대`: 정상 수렴. 픽셀-모터 좌표가 1:1로 일치하여 2cm 블록의 밀리미터 단위 정밀 파지가 가능함.
+     - `0.05 대 (정체)`: RandomAffine 위치 왜곡(라벨 노이즈) 주입, 청크 60스텝 확장, 또는 멀티태스크 과소적합의 전형적 증상. 실물 로봇에서 1~2cm 빗겨나는 헛손질 발생.
 
 ### 4.3 SmolVLA Full Fine-Tuning 학습 실행 템플릿 (기본 권장)
 ```bash
 python -m lerobot.scripts.lerobot_train \
   --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
-  --dataset.image_transforms.enable=true \
-  --dataset.image_transforms.max_num_transforms=3 \
+  --dataset.image_transforms.enable=false \
   --policy.type=smolvla \
-  --policy.chunk_size=60 \
-  --policy.n_action_steps=60 \
+  --policy.chunk_size=50 \
+  --policy.n_action_steps=50 \
   --policy.device=cuda \
   --output_dir="outputs/train/${RUN_NAME}" \
   --job_name="${RUN_NAME}" \
@@ -251,10 +257,10 @@ python project/scripts/tools/label_dataset_rewards.py \
 ```bash
 python -m lerobot.scripts.lerobot_train \
   --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
-  --dataset.image_transforms.enable=true \
+  --dataset.image_transforms.enable=false \
   --policy.type=smolvla \
-  --policy.chunk_size=60 \
-  --policy.n_action_steps=60 \
+  --policy.chunk_size=50 \
+  --policy.n_action_steps=50 \
   --policy.device=cuda \
   --batch_size=16 \
   --steps=150000 \
