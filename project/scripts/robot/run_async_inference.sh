@@ -191,6 +191,7 @@ ROBOT_PORT="${ROBOT_PORT:-/dev/so101_follower}"
 TELEOP_PORT="${TELEOP_PORT:-/dev/so101_leader}"
 TOP_CAM="${TOP_CAM:-/dev/cam_top}"
 WRIST_CAM="${WRIST_CAM:-/dev/cam_wrist}"
+export CAMERA_MAX_AGE_MS="${CAMERA_MAX_AGE_MS:-1500}"
 
 FPS="${FPS:-30}"
 WIDTH="${WIDTH:-640}"
