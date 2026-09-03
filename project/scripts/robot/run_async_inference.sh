@@ -108,8 +108,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Source active profile if present (only for fallbacks)
-if [[ -f "$LEROBOT_ROOT/project/config/experiment-profiles/active.env" ]]; then
+# Source active profile only if explicitly requested
+if [[ "${USE_ACTIVE_ENV:-false}" == "true" && -f "$LEROBOT_ROOT/project/config/experiment-profiles/active.env" ]]; then
   source "$LEROBOT_ROOT/project/config/experiment-profiles/active.env"
 fi
 
@@ -256,7 +256,7 @@ printf 'Safety Limiter: max_step=%s deg, tracking_error_max=%s deg (grace=%s ste
   "$MAX_RELATIVE_TARGET" "$MAX_TRACKING_ERROR" "$TRACKING_ERROR_GRACE_STEPS"
 
 if [[ "$HIL_ENABLED" == "true" ]]; then
-  printf '------------------------------------------------------------------------------\n'
+  printf '%s\n' '------------------------------------------------------------------------------'
   printf 'Dataset Repo:   %s%s\n' "$DATASET_REPO_ID" "$([[ "$RESUME" == "true" ]] && printf ' (resume)' || true)"
   printf 'Target Episodes:%s (max %ss per correction)\n' "$NUM_CORRECTIONS" "$MAX_CORRECTION_SECONDS"
   printf 'Push to Hub:    %s\n' "$PUSH_TO_HUB"
