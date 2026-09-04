@@ -249,7 +249,33 @@ DEBUG_OBSERVATION_LIMIT="${DEBUG_OBSERVATION_LIMIT:-1}"
 DEBUG_MOTOR_TRACE_DIR="${DEBUG_MOTOR_TRACE_DIR:-$LEROBOT_ROOT/var/debug/hil_motor_traces}"
 DEBUG_MOTOR_TRACE_LIMIT="${DEBUG_MOTOR_TRACE_LIMIT:-300}"
 
-CAMERA_KEY_MODE="${CAMERA_KEY_MODE:-policy}"
+if [[ -z "$CLI_CAMERA_KEY_MODE" ]]; then
+  DETECTED_CAMERA_MODE=$("$PYTHON_BIN" -c "
+import json
+from pathlib import Path
+repo_slug = '${MODEL_PATH}'.replace('/', '--')
+cache_dir = Path.home() / f'.cache/huggingface/hub/models--{repo_slug}/snapshots'
+mode = 'policy'
+if cache_dir.exists():
+    for s in cache_dir.iterdir():
+        cfg_file = s / 'config.json'
+        if cfg_file.exists():
+            try:
+                with open(cfg_file) as f:
+                    cfg = json.load(f)
+                inputs = cfg.get('input_features', {})
+                if 'observation.images.top' in inputs:
+                    mode = 'raw'
+                    break
+            except Exception:
+                pass
+print(mode)
+" 2>/dev/null || printf 'policy')
+  CAMERA_KEY_MODE="$DETECTED_CAMERA_MODE"
+else
+  CAMERA_KEY_MODE="$CLI_CAMERA_KEY_MODE"
+fi
+
 if [[ "$CAMERA_KEY_MODE" == "policy" ]]; then
   TOP_KEY="camera1"
   WRIST_KEY="camera2"
