@@ -160,8 +160,8 @@ fi
 POLICY_TYPE="${POLICY_TYPE:-act}"
 SERVER_ADDRESS="${SERVER_ADDRESS:-100.85.69.64:8080}"
 
-TASK1_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then place each at the target area."
-TASK2_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then hover over and stack each at the target area."
+TASK1_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then place each block separately into its designated target position."
+TASK2_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then hover over the target area and stack each block on top of the previous block."
 
 TASK_MODE="${CLI_TASK_MODE:-1}"
 if [[ -n "$CLI_TASK" ]]; then
@@ -184,6 +184,11 @@ else
   MODEL_PATH="${MODEL_PATH:-}"
   ACTIONS_PER_CHUNK="${ACTIONS_PER_CHUNK:-30}"
   MAX_RELATIVE_TARGET="${MAX_RELATIVE_TARGET:-1.0}"
+fi
+
+if [[ "$MODEL_PATH" =~ /checkpoints/[0-9]+$ && ! "$MODEL_PATH" =~ /pretrained_model$ ]]; then
+  printf 'ℹ️  Detected checkpoint step directory. Appending /pretrained_model: %s/pretrained_model\n' "$MODEL_PATH"
+  MODEL_PATH="${MODEL_PATH}/pretrained_model"
 fi
 
 # Ports & Cameras
