@@ -21,29 +21,108 @@ BELLY_CAM="${BELLY_CAM:-/dev/cam_belly}"
 
 SERVER_ADDRESS="${SERVER_ADDRESS:-100.85.69.64:8080}"
 SERVER_RPC_TIMEOUT_S="${SERVER_RPC_TIMEOUT_S:-3.0}"
-MODEL_PATH="${MODEL_PATH:-eslab1234/smolvla_red_full_138ep_recovery_lora_r64_lr1e3_20k_v1}"
-TASK="${TASK:-Pick up the red block and place it in the red target slot.}"
 
-DATASET_NAME="${DATASET_NAME:-red_smolvla_hil_corrections_r1}"
+# Model Configuration: Default to 285k checkpoint of multitask 5-blocks SmolVLA
+MODEL_PATH="${MODEL_PATH:-outputs/train/smolvla_multitask_5blocks_v3_575ep_fullft_b16_300k/checkpoints/285000/pretrained_model}"
+
+TASK1_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then place each block separately into its designated target position."
+TASK2_PROMPT="Pick up the 5 blocks in sequence (red, yellow, wood, green, blue), then hover over the target area and stack each block on top of the previous block."
+
+TASK_MODE="${TASK_MODE:-1}"
+if [[ "$TASK_MODE" =~ ^(2|task2|stack)$ ]]; then
+  DEFAULT_TASK="$TASK2_PROMPT"
+  DEFAULT_DATASET_NAME="smolvla_task2_hil_285k_v1"
+  DEFAULT_ACTIONS_PER_CHUNK=50
+  DEFAULT_CHUNK_SIZE_THRESHOLD="0.75"
+  DEFAULT_AGGREGATE_FN_NAME="weighted_average"
+  DEFAULT_MAX_REL_TARGET="1.75"
+else
+  DEFAULT_TASK="$TASK1_PROMPT"
+  DEFAULT_DATASET_NAME="smolvla_task1_hil_285k_v1"
+  DEFAULT_ACTIONS_PER_CHUNK=30
+  DEFAULT_CHUNK_SIZE_THRESHOLD="0.6"
+  DEFAULT_AGGREGATE_FN_NAME="latest_only"
+  DEFAULT_MAX_REL_TARGET="1.75"
+fi
+
+TASK="${TASK:-$DEFAULT_TASK}"
+DATASET_NAME="${DATASET_NAME:-$DEFAULT_DATASET_NAME}"
 DATASET_REPO_ID="${DATASET_REPO_ID:-${HF_USER}/${DATASET_NAME}}"
 NUM_CORRECTIONS="${NUM_CORRECTIONS:-20}"
-MAX_CORRECTION_SECONDS="${MAX_CORRECTION_SECONDS:-30}"
+MAX_CORRECTION_SECONDS="${MAX_CORRECTION_SECONDS:-60}"
 RESUME="${RESUME:-false}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-true}"
+RECORD_MODE="${RECORD_MODE:-corrections_only}"
 
 FPS="${FPS:-30}"
 WIDTH="${WIDTH:-640}"
 HEIGHT="${HEIGHT:-480}"
-ACTIONS_PER_CHUNK="${ACTIONS_PER_CHUNK:-30}"
-CHUNK_SIZE_THRESHOLD="${CHUNK_SIZE_THRESHOLD:-0.6}"
-AGGREGATE_FN_NAME="${AGGREGATE_FN_NAME:-latest_only}"
 
-MAX_RELATIVE_TARGET="${MAX_RELATIVE_TARGET:-3.0}"
-MAX_TRACKING_ERROR="${MAX_TRACKING_ERROR:-20.0}"
-TRACKING_ERROR_GRACE_STEPS="${TRACKING_ERROR_GRACE_STEPS:-5}"
+ACTIONS_PER_CHUNK="${ACTIONS_PER_CHUNK:-$DEFAULT_ACTIONS_PER_CHUNK}"
+CHUNK_SIZE_THRESHOLD="${CHUNK_SIZE_THRESHOLD:-$DEFAULT_CHUNK_SIZE_THRESHOLD}"
+AGGREGATE_FN_NAME="${AGGREGATE_FN_NAME:-$DEFAULT_AGGREGATE_FN_NAME}"
+
+MAX_RELATIVE_TARGET="${MAX_RELATIVE_TARGET:-$DEFAULT_MAX_REL_TARGET}"
+MAX_TRACKING_ERROR="${MAX_TRACKING_ERROR:-45.0}"
+TRACKING_ERROR_GRACE_STEPS="${TRACKING_ERROR_GRACE_STEPS:-15}"
+export CAMERA_MAX_AGE_MS="${CAMERA_MAX_AGE_MS:-3000}"
+
+PAN_BIAS_DIRECTION="${PAN_BIAS_DIRECTION:-left}"
+PAN_BIAS_NEAR_DEG="${PAN_BIAS_NEAR_DEG:-1.0}"
+PAN_BIAS_FAR_DEG="${PAN_BIAS_FAR_DEG:-3.5}"
+
+# Parse optional command line flags
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model_path=*|--model-path=*)
+      MODEL_PATH="${1#*=}"
+      shift
+      ;;
+    --model_path|--model-path)
+      MODEL_PATH="$2"
+      shift 2
+      ;;
+    --task=*|--task-prompt=*)
+      TASK="${1#*=}"
+      shift
+      ;;
+    --task_mode=*|--task-mode=*)
+      TASK_MODE="${1#*=}"
+      shift
+      ;;
+    --dataset_name=*|--dataset-name=*)
+      DATASET_NAME="${1#*=}"
+      DATASET_REPO_ID="${HF_USER}/${DATASET_NAME}"
+      shift
+      ;;
+    --num_corrections=*|--num-corrections=*)
+      NUM_CORRECTIONS="${1#*=}"
+      shift
+      ;;
+    --max_relative_target=*|--max-relative-target=*)
+      MAX_RELATIVE_TARGET="${1#*=}"
+      shift
+      ;;
+    --max_tracking_error=*|--max-tracking-error=*)
+      MAX_TRACKING_ERROR="${1#*=}"
+      shift
+      ;;
+    --tracking_error_grace_steps=*|--tracking-error-grace-steps=*)
+      TRACKING_ERROR_GRACE_STEPS="${1#*=}"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 
 OBSERVE_DURATION_S="${OBSERVE_DURATION_S:-3.0}"
 OBSERVE_SETTLE_S="${OBSERVE_SETTLE_S:-0.5}"
+RETRACT_RATIO="${RETRACT_RATIO:-0.4}"
+RETRACT_DURATION_S="${RETRACT_DURATION_S:-1.0}"
+RETRACT_LOCK_PAN="${RETRACT_LOCK_PAN:-true}"
+PRE_INTERVENTION_SECONDS="${PRE_INTERVENTION_SECONDS:-1.5}"
 LEADER_HANDOVER_DURATION_S="${LEADER_HANDOVER_DURATION_S:-1.2}"
 STREAMING_ENCODING="${STREAMING_ENCODING:-true}"
 ENCODER_THREADS="${ENCODER_THREADS:-2}"
@@ -122,13 +201,16 @@ printf '  dataset:     %s%s\n' "$DATASET_REPO_ID" "$([[ "$RESUME" == true ]] && 
 printf '  corrections: %s new episode(s)\n' "$NUM_CORRECTIONS"
 printf '  chunk:       %s / threshold=%s / %s\n' \
   "$ACTIONS_PER_CHUNK" "$CHUNK_SIZE_THRESHOLD" "$AGGREGATE_FN_NAME"
-printf '  safety:      step=%s, tracking=%s x %s\n\n' \
+printf '  safety:      step=%s, tracking=%s x %s\n' \
   "$MAX_RELATIVE_TARGET" "$MAX_TRACKING_ERROR" "$TRACKING_ERROR_GRACE_STEPS"
+printf '  pan bias:    %s (near=%.1f deg, far=%.1f deg)\n\n' \
+  "$PAN_BIAS_DIRECTION" "$PAN_BIAS_NEAR_DEG" "$PAN_BIAS_FAR_DEG"
 
 read -r -p "Robot area clear, leader arm free, emergency stop ready? Type HIL: " answer
 [[ "$answer" == "HIL" ]] || fail "Cancelled by user"
+export PYTHONUNBUFFERED=1
 
-exec python -m lerobot.grad_project.recording.smolvla_hil_record \
+exec python -u -m lerobot.grad_project.recording.smolvla_hil_record \
   --robot.type=so101_follower \
   --robot.port="$ROBOT_PORT" \
   --robot.id=follower \
@@ -149,9 +231,18 @@ exec python -m lerobot.grad_project.recording.smolvla_hil_record \
   --actions_per_chunk="$ACTIONS_PER_CHUNK" \
   --chunk_size_threshold="$CHUNK_SIZE_THRESHOLD" \
   --aggregate_fn_name="$AGGREGATE_FN_NAME" \
+  --record_mode="$RECORD_MODE" \
   --runtime_config="$RUNTIME_CONFIG" \
   --observe_pose_name=observe \
+  --pan_bias_direction="$PAN_BIAS_DIRECTION" \
+  --pan_bias_near_deg="$PAN_BIAS_NEAR_DEG" \
+  --pan_bias_far_deg="$PAN_BIAS_FAR_DEG" \
   --observe_duration_s="$OBSERVE_DURATION_S" \
+  --macro_return_duration_s="$OBSERVE_DURATION_S" \
+  --local_retract_ratio="$RETRACT_RATIO" \
+  --local_retract_duration_s="$RETRACT_DURATION_S" \
+  --local_retract_lock_pan="$RETRACT_LOCK_PAN" \
+  --pre_intervention_seconds="$PRE_INTERVENTION_SECONDS" \
   --observe_fps="$FPS" \
   --observe_settle_s="$OBSERVE_SETTLE_S" \
   --leader_handover_duration_s="$LEADER_HANDOVER_DURATION_S" \
