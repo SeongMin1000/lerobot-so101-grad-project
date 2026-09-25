@@ -19,6 +19,8 @@ Centralises all :mod:`av` introspection of the bundled FFmpeg build.
 Checks degrade to a no-op when the target codec isn't available locally.
 """
 
+from __future__ import annotations
+
 import functools
 import logging
 from typing import Any

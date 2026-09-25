@@ -206,11 +206,13 @@ class ImageTransformsConfig:
                 type="SharpnessJitter",
                 kwargs={"sharpness": (0.5, 1.5)},
             ),
-            "affine": ImageTransformConfig(
-                weight=1.0,
-                type="RandomAffine",
-                kwargs={"degrees": (-5.0, 5.0), "translate": (0.05, 0.05)},
-            ),
+            # NOTE: "affine" (RandomAffine) is disabled by default to prevent 1~2cm grasp misses
+            # and label noise (loss plateau at 0.05) caused by shifting images without updating actions.
+            # "affine": ImageTransformConfig(
+            #     weight=1.0,
+            #     type="RandomAffine",
+            #     kwargs={"degrees": (-5.0, 5.0), "translate": (0.05, 0.05)},
+            # ),
         }
     )
 

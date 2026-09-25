@@ -283,6 +283,14 @@ def test_prepare_image():
     assert processed.is_contiguous()
 
 
+def test_prepare_image_does_not_normalize_float_image_twice():
+    image = torch.tensor([[[0.0, 0.5, 1.0]]], dtype=torch.float32)
+
+    processed = prepare_image(image)
+
+    torch.testing.assert_close(processed, image)
+
+
 def test_resize_robot_observation_image():
     """Test image resizing from robot resolution to policy resolution."""
     # Create mock image: (H=480, W=640, C=3)
@@ -330,6 +338,40 @@ def test_prepare_raw_observation():
     # Check that images are tensors
     assert isinstance(laptop_img, torch.Tensor)
     assert isinstance(phone_img, torch.Tensor)
+
+
+def test_prepare_raw_observation_can_preserve_camera_geometry():
+    robot_obs = _create_mock_robot_observation()
+    lerobot_features = _create_mock_lerobot_features()
+    policy_image_features = _create_mock_policy_image_features()
+
+    prepared = prepare_raw_observation(
+        robot_obs,
+        lerobot_features,
+        policy_image_features,
+        resize_images=False,
+    )
+
+    assert prepared[f"{OBS_IMAGES}.laptop"].shape == (3, 480, 640)
+    assert prepared[f"{OBS_IMAGES}.phone"].shape == (3, 480, 640)
+
+
+def test_raw_observation_to_observation_can_preserve_camera_geometry():
+    robot_obs = _create_mock_robot_observation()
+    lerobot_features = _create_mock_lerobot_features()
+    policy_image_features = _create_mock_policy_image_features()
+
+    observation = raw_observation_to_observation(
+        robot_obs,
+        lerobot_features,
+        policy_image_features,
+        resize_images=False,
+    )
+
+    laptop_img = observation[f"{OBS_IMAGES}.laptop"]
+    assert laptop_img.shape == (1, 3, 480, 640)
+    assert laptop_img.dtype == torch.float32
+    assert laptop_img.min() >= 0.0 and laptop_img.max() <= 1.0
 
 
 def test_raw_observation_to_observation_basic():

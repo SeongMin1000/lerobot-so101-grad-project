@@ -33,12 +33,15 @@ python src/lerobot/async_inference/robot_client.py \
 ```
 """
 
+import json
 import logging
 import pickle  # nosec
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from queue import Queue
 from typing import Any
@@ -66,6 +69,7 @@ from lerobot.transport.utils import grpc_channel_options, send_bytes_in_chunks
 from lerobot.utils.import_utils import register_third_party_plugins
 
 from .configs import RobotClientConfig
+from .debug_capture import save_image_mapping
 from .helpers import (
     Action,
     FPSTracker,
@@ -125,6 +129,9 @@ class RobotClient:
         self.action_queue = Queue()
         self.action_queue_lock = threading.Lock()  # Protect queue operations
         self.action_queue_size = []
+        self._debug_observations_saved = 0
+        self._motor_trace = deque(maxlen=config.debug_motor_trace_limit)
+        self._motor_trace_session_id = f"trace_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}"
         self.start_barrier = threading.Barrier(2)  # 2 threads: action receiver, control loop
 
         # FPS measurement
@@ -173,6 +180,8 @@ class RobotClient:
     def stop(self):
         """Stop the robot client"""
         self.shutdown_event.set()
+
+        self._save_motor_trace()
 
         self.robot.disconnect()
         self.logger.debug("Robot disconnected")
@@ -378,9 +387,13 @@ class RobotClient:
             timed_action = self.action_queue.get_nowait()
         get_end = time.perf_counter() - get_start
 
-        _performed_action = self.robot.send_action(
-            self._action_tensor_to_action_dict(timed_action.get_action())
-        )
+        requested_action = self._action_tensor_to_action_dict(timed_action.get_action())
+        try:
+            _performed_action = self.robot.send_action(requested_action)
+        except Exception as error:
+            self._record_motor_trace(timed_action.get_timestep(), requested_action, None, error=error)
+            raise
+        self._record_motor_trace(timed_action.get_timestep(), requested_action, _performed_action)
         with self.latest_action_lock:
             self.latest_action = timed_action.get_timestep()
 
@@ -405,6 +418,64 @@ class RobotClient:
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self._chunk_size_threshold
 
+    def _record_motor_trace(
+        self,
+        timestep: int,
+        requested_action: dict[str, float],
+        performed_action: dict[str, float] | None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        if self.config.debug_motor_trace_dir is None:
+            return
+
+        robot_diagnostic = getattr(self.robot, "last_action_diagnostics", None)
+        entry: dict[str, Any] = {
+            "timestamp": time.time(),
+            "timestep": timestep,
+            "requested_action": requested_action,
+            "performed_action": performed_action,
+        }
+        if robot_diagnostic is not None:
+            entry["robot"] = robot_diagnostic
+        if error is not None:
+            entry["error"] = f"{type(error).__name__}: {error}"
+        self._motor_trace.append(entry)
+
+    def _save_motor_trace(self) -> None:
+        if self.config.debug_motor_trace_dir is None or not self._motor_trace:
+            return
+
+        trace_dir = Path(self.config.debug_motor_trace_dir).expanduser()
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        trace_path = trace_dir / f"{self._motor_trace_session_id}.json"
+        trace_path.write_text(
+            json.dumps(
+                list(self._motor_trace),
+                indent=2,
+                ensure_ascii=False,
+                default=lambda value: value.item() if hasattr(value, "item") else str(value),
+            ),
+            encoding="utf-8",
+        )
+        self.logger.info(f"Saved motor command/feedback trace to {trace_path}")
+
+    def _save_debug_observation_images(self, raw_observation: RawObservation) -> str | None:
+        """Save the exact camera arrays about to be serialized and sent to the server."""
+        if (
+            self.config.debug_observation_dir is None
+            or self._debug_observations_saved >= self.config.debug_observation_limit
+        ):
+            return None
+
+        capture_id = f"capture_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}"
+        capture_dir = Path(self.config.debug_observation_dir).expanduser() / capture_id
+        save_image_mapping(raw_observation, capture_dir)
+
+        self._debug_observations_saved += 1
+        self.logger.info(f"Saved outgoing camera images to {capture_dir}")
+        return capture_id
+
     def control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
         try:
             # Get serialized observation bytes from the function
@@ -412,6 +483,7 @@ class RobotClient:
 
             raw_observation: RawObservation = self.robot.get_observation()
             raw_observation["task"] = task
+            debug_capture_id = self._save_debug_observation_images(raw_observation)
 
             with self.latest_action_lock:
                 latest_action = self.latest_action
@@ -420,6 +492,7 @@ class RobotClient:
                 timestamp=time.time(),  # need time.time() to compare timestamps across client and server
                 observation=raw_observation,
                 timestep=max(latest_action, 0),
+                debug_capture_id=debug_capture_id,
             )
 
             obs_capture_time = time.perf_counter() - start_time

@@ -124,3 +124,58 @@ def ensure_safe_goal_position(
         )
 
     return safe_goal_positions
+
+
+def ensure_synchronized_goal_position(
+    goal_reference_pos: dict[str, tuple[float, float]],
+    max_relative_target: float | dict[str, float],
+) -> dict[str, float]:
+    """Rate-limit a multi-joint goal while preserving its direction.
+
+    ``goal_reference_pos`` maps each joint to ``(desired_goal, previous_command)``.
+    A single scale factor is applied to the complete joint delta vector, so no
+    joint can run ahead merely because another joint has a larger requested
+    displacement. Unlike :func:`ensure_safe_goal_position`, this function is
+    intended to use the previously commanded target as its reference rather
+    than the measured position.
+    """
+
+    if isinstance(max_relative_target, float):
+        diff_cap = dict.fromkeys(goal_reference_pos, max_relative_target)
+    elif isinstance(max_relative_target, dict):
+        if set(goal_reference_pos) != set(max_relative_target):
+            raise ValueError("max_relative_target keys must match those of goal_reference_pos.")
+        diff_cap = max_relative_target
+    else:
+        raise TypeError(max_relative_target)
+
+    for key, cap in diff_cap.items():
+        if cap < 0:
+            raise ValueError(f"max_relative_target for '{key}' must be non-negative, got {cap}.")
+
+    scale = 1.0
+    for key, (goal_pos, reference_pos) in goal_reference_pos.items():
+        diff = goal_pos - reference_pos
+        if abs(diff) > diff_cap[key] and abs(diff) > 0:
+            scale = min(scale, diff_cap[key] / abs(diff))
+
+    safe_goal_positions = {
+        key: reference_pos + scale * (goal_pos - reference_pos)
+        for key, (goal_pos, reference_pos) in goal_reference_pos.items()
+    }
+
+    if scale < 1.0:
+        warnings_dict = {
+            key: {
+                "original goal_pos": goal_pos,
+                "safe goal_pos": safe_goal_positions[key],
+            }
+            for key, (goal_pos, _reference_pos) in goal_reference_pos.items()
+            if abs(safe_goal_positions[key] - goal_pos) > 1e-4
+        }
+        logging.warning(
+            "Multi-joint goal step had to be scaled to preserve coordination "
+            f"(scale={scale:.6f}).\n{pformat(warnings_dict, indent=4)}"
+        )
+
+    return safe_goal_positions

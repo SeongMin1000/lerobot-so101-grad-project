@@ -46,7 +46,7 @@ RawObservation = dict[str, Any]
 # observation as those recorded in LeRobot dataset (keys are different)
 LeRobotObservation = dict[str, torch.Tensor]
 
-# observation, ready for policy inference (image keys resized)
+# observation, ready for policy inference
 Observation = dict[str, torch.Tensor]
 
 
@@ -71,10 +71,17 @@ def is_image_key(k: str) -> bool:
     return k.startswith(OBS_IMAGES)
 
 
-def resize_robot_observation_image(image: torch.tensor, resize_dims: tuple[int, int, int]) -> torch.tensor:
-    assert image.ndim == 3, f"Image must be (C, H, W)! Received {image.shape}"
-    # (H, W, C) -> (C, H, W) for resizing from robot obsevation resolution to policy image resolution
-    image = image.permute(2, 0, 1)
+def robot_observation_image_to_chw(image: torch.Tensor) -> torch.Tensor:
+    """Convert a raw robot camera image from HWC to CHW without changing its geometry."""
+    assert image.ndim == 3, f"Image must be (H, W, C)! Received {image.shape}"
+    return image.permute(2, 0, 1)
+
+
+def resize_robot_observation_image(
+    image: torch.Tensor, resize_dims: tuple[int, int, int]
+) -> torch.Tensor:
+    """Convert an HWC robot image to CHW and resize it to a policy's fixed input shape."""
+    image = robot_observation_image_to_chw(image)
     dims = (resize_dims[1], resize_dims[2])
     # Add batch dimension for interpolate: (C, H, W) -> (1, C, H, W)
     image_batched = image.unsqueeze(0)
@@ -89,10 +96,17 @@ def raw_observation_to_observation(
     raw_observation: RawObservation,
     lerobot_features: dict[str, dict],
     policy_image_features: dict[str, PolicyFeature],
+    *,
+    resize_images: bool = True,
 ) -> Observation:
     observation = {}
 
-    observation = prepare_raw_observation(raw_observation, lerobot_features, policy_image_features)
+    observation = prepare_raw_observation(
+        raw_observation,
+        lerobot_features,
+        policy_image_features,
+        resize_images=resize_images,
+    )
     for k, v in observation.items():
         if isinstance(v, torch.Tensor):  # VLAs present natural-language instructions in observations
             if "image" in k:
@@ -105,11 +119,31 @@ def raw_observation_to_observation(
 
 
 def prepare_image(image: torch.Tensor) -> torch.Tensor:
-    """Minimal preprocessing to turn int8 images to float32 in [0, 1], and create a memory-contiguous tensor"""
-    image = image.type(torch.float32) / 255
-    image = image.contiguous()
+    """Convert camera data to contiguous float32 in [0, 1] exactly once.
 
-    return image
+    Robot cameras normally provide uint8 values in [0, 255]. Some transports
+    already convert them to float values in [0, 1]; dividing those values by
+    255 again would make the policy input nearly black.
+    """
+    input_is_float = torch.is_floating_point(image)
+    image = image.to(dtype=torch.float32)
+
+    if not torch.isfinite(image).all():
+        raise ValueError("Image contains non-finite values")
+
+    image_min = image.amin().item()
+    image_max = image.amax().item()
+    if image_min < 0:
+        raise ValueError(f"Image values must be non-negative, got minimum {image_min}")
+
+    if input_is_float and image_max <= 1.0:
+        pass
+    elif image_max <= 255.0:
+        image = image / 255.0
+    else:
+        raise ValueError(f"Image values must be in [0, 1] or [0, 255], got maximum {image_max}")
+
+    return image.contiguous()
 
 
 def extract_state_from_raw_observation(
@@ -144,6 +178,8 @@ def prepare_raw_observation(
     robot_obs: RawObservation,
     lerobot_features: dict[str, dict],
     policy_image_features: dict[str, PolicyFeature],
+    *,
+    resize_images: bool = True,
 ) -> Observation:
     """Matches keys from the raw robot_obs dict to the keys expected by a given policy (passed as
     policy_image_features)."""
@@ -155,16 +191,16 @@ def prepare_raw_observation(
     image_keys = list(filter(is_image_key, lerobot_obs))
     # state's shape is expected as (B, state_dim)
     state_dict = {OBS_STATE: extract_state_from_raw_observation(lerobot_obs)}
-    image_dict = {
-        image_k: extract_images_from_raw_observation(lerobot_obs, image_k) for image_k in image_keys
-    }
-
-    # Turns the image features to (C, H, W) with H, W matching the policy image features.
-    # This reduces the resolution of the images
-    image_dict = {
-        key: resize_robot_observation_image(torch.tensor(lerobot_obs[key]), policy_image_features[key].shape)
-        for key in image_keys
-    }
+    image_dict = {}
+    for key in image_keys:
+        image = extract_images_from_raw_observation(lerobot_obs, key)
+        if resize_images:
+            # Policies such as ACT expect the fixed image size declared in their config.
+            image = resize_robot_observation_image(image, policy_image_features[key].shape)
+        else:
+            # SmolVLA performs its own aspect-ratio-preserving resize and padding.
+            image = robot_observation_image_to_chw(image)
+        image_dict[key] = image
 
     if "task" in robot_obs:
         state_dict["task"] = robot_obs["task"]
@@ -172,7 +208,7 @@ def prepare_raw_observation(
     return {**state_dict, **image_dict}
 
 
-def get_logger(name: str, log_to_file: bool = True) -> logging.Logger:
+def get_logger(name: str, log_to_file: bool | None = None) -> logging.Logger:
     """
     Get a logger using the standardized logging setup from utils.py.
 
@@ -183,10 +219,12 @@ def get_logger(name: str, log_to_file: bool = True) -> logging.Logger:
     Returns:
         Configured logger instance
     """
-    # Create logs directory if logging to file
+    # File logging is off by default. Enable with LEROBOT_FILE_LOGS=1.
+    if log_to_file is None:
+        log_to_file = os.environ.get("LEROBOT_FILE_LOGS", "0") == "1"
     if log_to_file:
         os.makedirs("logs", exist_ok=True)
-        log_file = Path(f"logs/{name}_{int(time.time())}.log")
+        log_file = Path(f"logs/{name}.log")
     else:
         log_file = None
 
@@ -229,9 +267,13 @@ class TimedAction(TimedData):
 class TimedObservation(TimedData):
     observation: RawObservation
     must_go: bool = False
+    debug_capture_id: str | None = None
 
     def get_observation(self):
         return self.observation
+
+    def get_debug_capture_id(self):
+        return self.debug_capture_id
 
 
 @dataclass

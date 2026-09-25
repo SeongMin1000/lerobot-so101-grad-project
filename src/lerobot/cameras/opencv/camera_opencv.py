@@ -563,10 +563,13 @@ class OpenCVCamera(Camera):
         if frame is None or timestamp is None:
             raise RuntimeError(f"{self} has not captured any frames yet.")
 
+        env_max_age = os.environ.get("CAMERA_MAX_AGE_MS")
+        effective_max_age = int(env_max_age) if env_max_age is not None else (1500 if max_age_ms == 500 else max_age_ms)
+
         age_ms = (time.perf_counter() - timestamp) * 1e3
-        if age_ms > max_age_ms:
+        if age_ms > effective_max_age:
             raise TimeoutError(
-                f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms)."
+                f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {effective_max_age} ms)."
             )
 
         return frame

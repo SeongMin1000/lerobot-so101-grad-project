@@ -114,13 +114,35 @@ def build_dataset_frame(
         dict: A dictionary representing a single frame of data.
     """
     frame = {}
+    from lerobot.configs.types import FeatureType
     for key, ft in ds_features.items():
         if key in DEFAULT_FEATURES or not key.startswith(prefix):
             continue
-        elif ft["dtype"] == "float32" and len(ft["shape"]) == 1:
-            frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
-        elif ft["dtype"] in ["image", "video"]:
-            frame[key] = values[key.removeprefix(f"{prefix}.images.")]
+        
+        if isinstance(ft, dict):
+            ft_type = ft["dtype"]
+            ft_shape = ft["shape"]
+            ft_names = ft.get("names")
+        else:
+            ft_type = "float32" if ft.type == FeatureType.STATE else "image"
+            ft_shape = ft.shape
+            ft_names = getattr(ft, "names", None)
+
+        if ft_type == "float32" and len(ft_shape) == 1:
+            if ft_names:
+                frame[key] = np.array([values[name] for name in ft_names], dtype=np.float32)
+            else:
+                state_keys = ["shoulder_pan.pos", "shoulder_lift.pos", "elbow_flex.pos", "wrist_flex.pos", "wrist_roll.pos", "gripper.pos"]
+                if all(k in values for k in state_keys):
+                    frame[key] = np.array([values[k] for k in state_keys], dtype=np.float32)
+                elif key in values:
+                    frame[key] = np.array(values[key], dtype=np.float32)
+        elif ft_type in ["image", "video"]:
+            img_key = key.removeprefix(f"{prefix}.images.")
+            if img_key in values:
+                frame[key] = values[img_key]
+            elif key in values:
+                frame[key] = values[key]
 
     return frame
 

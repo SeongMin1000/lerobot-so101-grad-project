@@ -1,0 +1,20 @@
+{
+  "homography_pixel_to_robot_xy_m": [
+    [
+      -0.00011615634182158073,
+      0.001795077362331104,
+      -0.0943820567798663
+    ],
+    [
+      0.0013173972490729308,
+      0.0001104880740025986,
+      -0.4255988409642974
+    ],
+    [
+      -3.5255726286325345e-05,
+      0.0009960487455660252,
+      0.8999731535071589
+    ]
+  ],
+  "note": "Refit 2026-09-02 from the same 1369 mined samples, but with the grasp moment taken at the START of the gripper dwell instead of its deepest point. Teleoperators routinely squeeze harder AFTER lifting, so the deepest-close frame often caught the arm already in the air: grasp height spread was 186mm that way and 95mm this way. Held-out XY median 14.7mm -> 12.5mm. Also tested and rejected: using only each episode first grasp (red), on the theory that later blocks get nudged before their turn -- that scored 12.7mm, slightly worse, so the blocks are not moving and the smaller sample count just costs accuracy."
+}

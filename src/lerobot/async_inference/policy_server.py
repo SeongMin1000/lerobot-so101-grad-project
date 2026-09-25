@@ -30,6 +30,7 @@ import threading
 import time
 from concurrent import futures
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from queue import Empty, Queue
 from typing import Any
@@ -49,6 +50,7 @@ from lerobot.types import PolicyAction
 
 from .configs import PolicyServerConfig
 from .constants import SUPPORTED_POLICIES
+from .debug_capture import save_image_mapping
 from .helpers import (
     FPSTracker,
     Observation,
@@ -87,6 +89,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.policy = None
         self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
+        self._logged_policy_input_stats = False
+        self._debug_capture_ids: set[str] = set()
 
     @property
     def running(self):
@@ -104,6 +108,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         with self._predicted_timesteps_lock:
             self._predicted_timesteps = set()
+
+        self.last_processed_obs = None
+        self._debug_capture_ids = set()
 
     def Ready(self, request, context):  # noqa: N802
         client_id = context.peer()
@@ -145,24 +152,41 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.policy_type = policy_specs.policy_type  # act, pi0, etc.
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
+        self._logged_policy_input_stats = False
+
+        model_path = policy_specs.pretrained_name_or_path
+        if not Path(model_path).exists():
+            for base_dir in [Path.cwd(), Path(__file__).resolve().parents[3], Path.home() / "lerobot"]:
+                candidate = base_dir / model_path
+                if candidate.exists():
+                    model_path = str(candidate)
+                    break
 
         policy_class = get_policy_class(self.policy_type)
 
         start = time.perf_counter()
-        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
+        self.policy = policy_class.from_pretrained(model_path)
         self.policy.to(self.device)
 
         # Load preprocessor and postprocessor, overriding device to match requested device
         device_override = {"device": self.device}
+        preprocessor_overrides = {"device_processor": device_override}
+        # An empty runtime map means "use the mapping saved with the checkpoint".
+        # Overriding it with {} would silently remove a training-time rename map.
+        if policy_specs.rename_map:
+            preprocessor_overrides["rename_observations_processor"] = {"rename_map": policy_specs.rename_map}
         self.preprocessor, self.postprocessor = make_pre_post_processors(
             self.policy.config,
-            pretrained_path=policy_specs.pretrained_name_or_path,
-            preprocessor_overrides={
-                "device_processor": device_override,
-                "rename_observations_processor": {"rename_map": policy_specs.rename_map},
-            },
+            pretrained_path=model_path,
+            preprocessor_overrides=preprocessor_overrides,
             postprocessor_overrides={"device_processor": device_override},
         )
+
+        effective_rename_map = next(
+            (step.rename_map for step in self.preprocessor.steps if hasattr(step, "rename_map")),
+            {},
+        )
+        self.logger.info(f"Policy preprocessor rename_map: {effective_rename_map}")
 
         end = time.perf_counter()
 
@@ -182,6 +206,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         )  # blocking call while looping over request_iterator
         timed_observation = pickle.loads(received_bytes)  # nosec
         deserialize_time = time.perf_counter() - start_deserialize
+
+        self._capture_debug_observation(timed_observation, timed_observation.get_observation(), "raw")
 
         self.logger.debug(f"Received observation #{timed_observation.get_timestep()}")
 
@@ -327,6 +353,28 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         return chunk[:, : self.actions_per_chunk, :]
 
+    def _capture_debug_observation(
+        self,
+        timed_observation: TimedObservation,
+        values: dict[str, Any],
+        stage: str,
+    ) -> None:
+        capture_root = self.config.debug_observation_dir
+        capture_id = timed_observation.get_debug_capture_id()
+        if capture_root is None or capture_id is None:
+            return
+
+        if stage == "raw":
+            if len(self._debug_capture_ids) >= self.config.debug_observation_limit:
+                return
+            self._debug_capture_ids.add(capture_id)
+        elif capture_id not in self._debug_capture_ids:
+            return
+
+        capture_dir = Path(capture_root).expanduser() / capture_id
+        output_dir = save_image_mapping(values, capture_dir, stage=stage)
+        self.logger.info(f"Saved {stage} camera diagnostic stage to {output_dir}")
+
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
         """Predict an action chunk based on an observation.
 
@@ -343,14 +391,51 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             observation_t.get_observation(),
             self.lerobot_features,
             self.policy_image_features,
+            # SmolVLA's model code preserves aspect ratio and pads images itself.
+            # Resizing 640x480 camera frames to the configured 256x256 feature
+            # shape here would squash their geometry before they reach the VLA.
+            resize_images=self.policy_type != "smolvla",
         )
+        self._capture_debug_observation(observation_t, observation, "helper")
         prepare_time = time.perf_counter() - start_prepare
 
         """2. Apply preprocessor"""
         start_preprocess = time.perf_counter()
         observation = self.preprocessor(observation)
+        self._capture_debug_observation(observation_t, observation, "policy")
         self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
+
+        # Auto-alias camera keys between client convention and policy expected features:
+        # e.g., camera1/camera2/camera3 <-> top/wrist/belly
+        if hasattr(self.policy, "config") and hasattr(self.policy.config, "image_features"):
+            expected_img_keys = set(self.policy.config.image_features.keys())
+            if not any(k in observation for k in expected_img_keys):
+                alias_pairs = [
+                    ("observation.images.camera1", "observation.images.top"),
+                    ("observation.images.camera2", "observation.images.wrist"),
+                    ("observation.images.camera3", "observation.images.belly"),
+                ]
+                for c_key, raw_key in alias_pairs:
+                    if raw_key in expected_img_keys and c_key in observation and raw_key not in observation:
+                        observation[raw_key] = observation[c_key]
+                        self.logger.warning(
+                            f"[AUTO-ALIAS] Mapped incoming {c_key} -> {raw_key} to match policy image_features"
+                        )
+                    elif c_key in expected_img_keys and raw_key in observation and c_key not in observation:
+                        observation[c_key] = observation[raw_key]
+                        self.logger.warning(
+                            f"[AUTO-ALIAS] Mapped incoming {raw_key} -> {c_key} to match policy image_features"
+                        )
+
+        if not self._logged_policy_input_stats:
+            for key, value in observation.items():
+                if isinstance(value, torch.Tensor) and "image" in key:
+                    self.logger.info(
+                        f"Policy input {key}: shape={tuple(value.shape)}, dtype={value.dtype}, "
+                        f"min={value.amin().item():.6f}, max={value.amax().item():.6f}"
+                    )
+            self._logged_policy_input_stats = True
 
         """3. Get action chunk"""
         start_inference = time.perf_counter()

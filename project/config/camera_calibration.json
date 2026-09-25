@@ -1,0 +1,23 @@
+{
+  "homography_pixel_to_table_cm": [
+    [
+      0.14776786021916663,
+      0.015974903807477438,
+      -38.1081330327375
+    ],
+    [
+      -0.002290223774428445,
+      0.19581413271363074,
+      -42.73901096649614
+    ],
+    [
+      -0.00032373022316078986,
+      0.0017763382763889776,
+      1.0
+    ]
+  ],
+  "world_frame_origin": "target zone top-left corner (per target_polygon clockwise order)",
+  "world_frame_axes": "+x along 20cm edge, +y along 10cm edge, units cm",
+  "source": "target_polygon (detector.json), 20x10cm official target zone",
+  "note": "This maps camera pixels to a TABLE frame, not the robot base frame. A separate robot-to-table alignment (done physically) is required before use in IK."
+}

@@ -1,0 +1,31 @@
+{
+  "homography_pixel_to_robot_xy_m": [
+    [
+      -1.3254029989369361e-05,
+      0.001978969403680159,
+      -0.1781551036782228
+    ],
+    [
+      0.0014236184351008212,
+      1.4013271281568025e-06,
+      -0.4503356519933287
+    ],
+    [
+      -4.9963288317399505e-05,
+      0.0012825811224653947,
+      1.0
+    ]
+  ],
+  "grasp_z_plane_abc": [
+    -1.1420183894505359e-17,
+    0.0,
+    0.024999999999999994
+  ],
+  "grasp_z_mean_m": 0.025,
+  "grasp_z_min_m": 0.025,
+  "grasp_z_max_m": 0.025,
+  "sample_count": 34,
+  "mean_residual_mm": 2.0336188787377187,
+  "max_residual_mm": 4.363139319767918,
+  "note": "Ruler grid ground-truth calibration for dataset recording (34 points, tilted top camera)."
+}

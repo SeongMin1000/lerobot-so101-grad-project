@@ -243,6 +243,8 @@ class SmolVLAPolicy(PreTrainedPolicy):
         require_package("transformers", extra="smolvla")
         super().__init__(config)
         config.validate_features()
+        if not getattr(config, "use_cache", True):
+            config.use_cache = True
         self.config = config
         self.init_rtc_processor()
         self.model = VLAFlowMatching(config, rtc_processor=self.rtc_processor)
