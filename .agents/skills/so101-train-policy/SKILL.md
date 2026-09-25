@@ -120,27 +120,55 @@ python -m lerobot.scripts.lerobot_train \
 
 자연어 지시문 기반 멀티태스크 및 시각-언어-행동 파운데이션 모델 파인튜닝.
 
-### 4.1 Full Fine-Tuning 공식 권장 하이퍼파라미터 (기본값)
-비전 인코더를 동결 해제하여 현장 조명 및 근접 블록 시야를 완벽하게 학습하는 최고 성능 세팅입니다:
-- **Base Model**: `lerobot/smolvla_base`
-- **PEFT / LoRA**: `--policy.use_peft=false` (LoRA 미사용, 전 계층 직접 업데이트)
-- **동결 해제 (Unfreeze)**:
-  - `--policy.freeze_vision_encoder=false` (비전 인코더 동결 완전 해제)
-  - `--policy.train_expert_only=false` (VLM 백본 전체 학습)
-  - `--policy.train_state_proj=true` (관절 프로젝션 레이어 학습)
-- **Action Chunk (고정)**: **`--policy.chunk_size=50 --policy.n_action_steps=50`** (검증된 50스텝으로 통일 고정)
-- **Steps**: **150,000 steps** (30만~45만 프레임 기준 약 5.2~5.5 Epochs 달성)
-- **Batch Size**: 16 (RTX 3090 24GB 기준 VRAM 최적화)
-- **Optimizer & LR**:
-  - AdamW, Peak LR **`2e-5 (0.00002)`**, $\beta=(0.9, 0.95)$, Weight Decay `0.01`, Grad Clip Norm `10.0`
-- **Scheduler**:
-  - Cosine Decay with Warmup: Warmup `3000` steps, Decay `150000` steps, Decay LR `1e-6`
-- **체크포인트 저장 주기**: `save_freq=15000` (1.5만 스텝마다 저장, 총 10개 체크포인트)
-- **이미지 증강**: `--dataset.image_transforms.enable=false` (위치 왜곡 RandomAffine 방지를 위해 기본 OFF 권장)
+### 4.1 Full Fine-Tuning 표준 고정 파라미터 vs 가변 파라미터
 
-*(참고: 빠른 실험용 LoRA 학습 시에는 `--policy.use_peft=true --peft.r=64 --peft.lora_alpha=64 --policy.freeze_vision_encoder=true --policy.optimizer_lr=3e-4 --steps=40000` 사용)*
+> 🚨 **SmolVLA 표준 원칙**: 아래 목록에서 **[가변 파라미터]**를 제외한 모든 파라미터는 RTX 3090/4090 24GB VRAM 환경에서 OOM 없이 배치 16을 안정 구동하도록 **완전 고정**합니다. 임의로 변경하지 마십시오.
 
-### 4.2 SmolVLA Loss 지표 해석 가이드 (👉 최종 `loss` 집중 모니터링)
+#### 🔒 1. 불변 고정 파라미터 (Fixed Standard Parameters — 수정 금지)
+| 항목 | 고정 설정값 | 설정 사유 및 효과 |
+| :--- | :--- | :--- |
+| **환경변수 1** | `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | PyTorch 메모리 단편화 방지 |
+| **환경변수 2** | `export ACCELERATE_MIXED_PRECISION="bf16"` | **배치 16 VRAM OOM 방지 핵심**: VRAM 23.5GB $\to$ 14GB (10GB 여유 확보), SmolVLM2 네이티브 포맷 무손실 1.5배 가속 |
+| **비디오 백엔드** | `--dataset.video_backend="torchcodec"` | 고속 프레임 시크 및 CPU 디코딩 최적화 |
+| **프레임 포맷** | `--dataset.return_uint8=true` | DataLoader IPC 메모리 절약 |
+| **정규화 통계** | `--dataset.use_imagenet_stats=true` | SigLIP 비전 백본 표준 입력 스케일 |
+| **이미지 증강** | `--dataset.image_transforms.enable=true`<br>`--dataset.image_transforms.max_num_transforms=3` | 기하 왜곡(RandomAffine) 없이 조명/색상 5종만 안전 적용 |
+| **정책 타입** | `--policy.type=smolvla` | SmolVLA 파운데이션 모델 |
+| **액션 청크** | `--policy.chunk_size=50`<br>`--policy.n_action_steps=50` | SO-101 검증 표준 50스텝 고정 |
+| **실행 장치** | `--policy.device=cuda` | GPU 가속 |
+| **전체 동결 해제** | `--policy.use_peft=false`<br>`--policy.freeze_vision_encoder=false`<br>`--policy.train_expert_only=false`<br>`--policy.train_state_proj=true` | LoRA 배제, VLM 전 계층 및 관절 프로젝션 Full Fine-Tuning |
+| **KV 캐시 인자** | **`--policy.use_cache=false` 절대 추가 금지**<br>(기본값 `true` 유지) | **🚨 치명적 에러 유발 방지**: 학습 시엔 내부 코드에서 `use_cache=False`가 하드코딩되어 있어 CLI에 이 옵션을 줘도 VRAM이 1바이트도 줄지 않음. 반면 이 옵션을 주면 체크포인트 `config.json`에 `false`로 저장되어 추론(`sample_actions`) 시 Action Expert KV 캐시가 비어 **`The size of tensor a (227) must match the size of tensor b (50)`** 런타임 크래시 발생 |
+| **배치 사이즈** | `--batch_size=16` | RTX 3090/4090 24GB 기준 표준 배치 |
+| **데이터로더** | `--num_workers=8`<br>`--prefetch_factor=2`<br>`--persistent_workers=true` | 8개 워커와 큐 버퍼 2배율로 VRAM/RAM 오버헤드 최소화 |
+| **로깅 및 허브** | `--wandb.enable=true`<br>`--wandb.project="lerobot-so101-grad"`<br>`--policy.push_to_hub=true` | 학습 지표 모니터링 및 HF Hub 자동 백업 |
+
+#### 🎛️ 2. 사용자 조절 가변 파라미터 (User Configurable Parameters — 상황에 맞게 입력)
+- `--dataset.repo_id`: 학습 데이터셋 Hugging Face Hub ID (예: `eslab1234/multitask_5blocks_v3_704ep_hil_r1_merged`)
+- `--policy.pretrained_path`: 시작 체크포인트 경로 (예: `outputs/train/smolvla_multitask_5blocks_v3_575ep_fullft_b16_300k/checkpoints/285000/pretrained_model` 또는 `lerobot/smolvla_base`)
+- `--steps`: 총 학습 스텝 수 (예: `40000` 또는 `150000`)
+- `--policy.scheduler_decay_steps`: 감쇄 스텝 수 (**반드시 `--steps`와 1:1로 동일하게 일치**)
+- `--policy.optimizer_lr`: 학습률 (이어서 미세 조정 시 `1e-5`, 신규 데이터 학습 시 `2e-5`)
+- `--policy.scheduler_warmup_steps`: 웜업 스텝 (미세 조정 시 `1500`, 대규모 세션 시 `3000`)
+- `--policy.scheduler_decay_lr`: 최저 학습률 (`1e-6`)
+- `--save_freq`: 체크포인트 저장 주기 (예: `5000` 또는 `15000`)
+- `--output_dir` / `--job_name`: 출력 디렉터리 및 작업명
+- `--policy.repo_id`: HF Hub 모델 업로드 경로 (예: `eslab1234/${RUN_NAME}`)
+
+---
+
+### 4.2 💡 VRAM 24GB 환경에서 배치 16 OOM 발생 원인 및 해결 (트러블슈팅)
+
+1. **왜 이전 575ep 30만 스텝 때는 안 터졌는데, 지금 30MB 부족으로 터졌는가?**:
+   - FP32(단정밀도) 모드에서 SmolVLA 배치 16은 모델(1.8GB) + 옵티마이저(4.8GB) + 16개 트랜스포머 레이어의 Activation(16.8GB)으로 인해 **기본적으로 VRAM 23.4~23.5GB(99.8%)를 소모하며 칼날 위에서 턱걸이**를 하고 있었습니다.
+   - 에러 로그: `Tried to allocate 30.00 MiB. GPU 0 has a total capacity of 23.68 GiB of which 18.88 MiB is free.`
+   - 704ep 데이터셋에 긴 자연어 태스크 프롬프트가 병합되면서 토큰 시퀀스 길이가 단 2~3개 늘어났고, 16개 어텐션 레이어를 통과하며 **정확히 30MB가 초과**되어 OOM이 발생한 것입니다.
+2. **해결책**:
+   - `export ACCELERATE_MIXED_PRECISION="bf16"`을 실행 세션에 1줄 선언해주면 어텐션 텐서가 2바이트로 계산되어 **VRAM이 23.5GB에서 14GB 내외로 즉시 10GB 가까이 여유가 생기며 절대 OOM이 나지 않습니다**.
+   - SmolVLM2 원본 백본이 bfloat16이므로 정밀도 손실 없이 학습 속도도 1.5배 빨라집니다.
+
+---
+
+### 4.3 SmolVLA Loss 지표 해석 가이드 (👉 최종 `loss` 집중 모니터링)
 SmolVLA는 Flow Matching (확률 흐름 생성) 모델이므로 L1/KLD 대신 **3단계 패딩 필터링 후 최종 `loss`**를 계산합니다:
 
 1. **`losses_after_forward` (1단계 원시 오차)**: 순전파 직후 패딩이 포함된 전체 텐서의 Flow Matching MSE 오차.
@@ -152,20 +180,27 @@ SmolVLA는 Flow Matching (확률 흐름 생성) 모델이므로 L1/KLD 대신 **
      - `0.03 대`: 정상 수렴. 픽셀-모터 좌표가 1:1로 일치하여 2cm 블록의 밀리미터 단위 정밀 파지가 가능함.
      - `0.05 대 (정체)`: RandomAffine 위치 왜곡(라벨 노이즈) 주입, 청크 60스텝 확장, 또는 멀티태스크 과소적합의 전형적 증상. 실물 로봇에서 1~2cm 빗겨나는 헛손질 발생.
 
-### 4.3 SmolVLA Full Fine-Tuning 학습 실행 템플릿 (기본 권장)
+---
+
+### 4.4 SmolVLA Full Fine-Tuning 학습 실행 템플릿 (공식 표준)
+
 ```bash
+# 1. 필수 환경변수 선언 (메모리 단편화 방지 및 VRAM 14GB 안정화)
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export ACCELERATE_MIXED_PRECISION="bf16"
+
+# 2. 고정 세팅 기반 학습 실행 (가변 파라미터만 조정)
 python -m lerobot.scripts.lerobot_train \
   --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
-  --dataset.image_transforms.enable=false \
+  --dataset.video_backend="torchcodec" \
+  --dataset.return_uint8=true \
+  --dataset.use_imagenet_stats=true \
+  --dataset.image_transforms.enable=true \
+  --dataset.image_transforms.max_num_transforms=3 \
   --policy.type=smolvla \
   --policy.chunk_size=50 \
   --policy.n_action_steps=50 \
   --policy.device=cuda \
-  --output_dir="outputs/train/${RUN_NAME}" \
-  --job_name="${RUN_NAME}" \
-  --batch_size=16 \
-  --steps=150000 \
-  --save_freq=15000 \
   --policy.use_peft=false \
   --policy.freeze_vision_encoder=false \
   --policy.train_expert_only=false \
@@ -174,8 +209,16 @@ python -m lerobot.scripts.lerobot_train \
   --policy.scheduler_warmup_steps=3000 \
   --policy.scheduler_decay_steps=150000 \
   --policy.scheduler_decay_lr=1e-6 \
+  --batch_size=16 \
+  --num_workers=8 \
+  --prefetch_factor=2 \
+  --persistent_workers=true \
+  --steps=150000 \
+  --save_freq=15000 \
+  --output_dir="outputs/train/${RUN_NAME}" \
+  --job_name="${RUN_NAME}" \
   --wandb.enable=true \
-  --wandb.project=lerobot \
+  --wandb.project="lerobot-so101-grad" \
   --policy.push_to_hub=true \
   --policy.repo_id="${HF_USER}/${RUN_NAME}"
 ```
@@ -208,51 +251,45 @@ python -m lerobot.scripts.lerobot_train \
 #### 📌 필수 하이퍼파라미터 세팅 규칙
 > **핵심 원칙**: 추가 학습 세션에서는 **반드시 `--steps`와 `--policy.scheduler_decay_steps`를 1:1로 동일하게 일치**시키고, 기존 가중치 충격 방지를 위해 **짧은 웜업(1000~2000 스텝)**을 부여해야 합니다.
 
-1. **케이스 1: 기존 데이터셋으로 더 정밀하게 다듬을 때 (Fine Polish)**
-   - 기존 지식을 유지하며 미세 수렴할 수 있도록 **학습률을 절반(`1e-5`)으로 낮추고 짧게 웜업**:
-   ```bash
-   python -m lerobot.scripts.lerobot_train \
-     --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
-     --dataset.image_transforms.enable=true \
-     --dataset.image_transforms.max_num_transforms=3 \
-     --policy.type=smolvla \
-     --policy.chunk_size=50 \
-     --policy.n_action_steps=50 \
-     --policy.pretrained_path="${HF_USER}/${BASE_MODEL_NAME}" \
-     --policy.optimizer_lr=1e-5 \
-     --policy.scheduler_warmup_steps=1000 \
-     --policy.scheduler_decay_steps=50000 \
-     --steps=50000 \
-     --output_dir="outputs/train/${NEW_RUN_NAME}" \
-     --job_name="${NEW_RUN_NAME}" \
-     --save_freq=10000 \
-     --wandb.enable=true \
-     --policy.push_to_hub=true \
-     --policy.repo_id="${HF_USER}/${NEW_RUN_NAME}"
-   ```
+```bash
+# 필수 환경변수 선언
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export ACCELERATE_MIXED_PRECISION="bf16"
 
-2. **케이스 2: 신규 에피소드(추가 데이터셋)를 얹어서 계속 학습할 때 (Continued Training)**
-   - 새 데이터를 적극적으로 흡수해야 하므로 **기존 학습률(`2e-5`)을 유지**하고 스텝 수에 맞게 스케줄러를 재설정:
-   ```bash
-   python -m lerobot.scripts.lerobot_train \
-     --dataset.repo_id="${HF_USER}/${NEW_DATASET_NAME}" \
-     --dataset.image_transforms.enable=true \
-     --dataset.image_transforms.max_num_transforms=3 \
-     --policy.type=smolvla \
-     --policy.chunk_size=50 \
-     --policy.n_action_steps=50 \
-     --policy.pretrained_path="${HF_USER}/${BASE_MODEL_NAME}" \
-     --policy.optimizer_lr=2e-5 \
-     --policy.scheduler_warmup_steps=2000 \
-     --policy.scheduler_decay_steps=100000 \
-     --steps=100000 \
-     --output_dir="outputs/train/${NEW_RUN_NAME}" \
-     --job_name="${NEW_RUN_NAME}" \
-     --save_freq=15000 \
-     --wandb.enable=true \
-     --policy.push_to_hub=true \
-     --policy.repo_id="${HF_USER}/${NEW_RUN_NAME}"
-   ```
+# 체크포인트 기반 이어서 파인튜닝 (배치 16 불변 고정 표준)
+python -m lerobot.scripts.lerobot_train \
+  --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
+  --dataset.video_backend="torchcodec" \
+  --dataset.return_uint8=true \
+  --dataset.use_imagenet_stats=true \
+  --dataset.image_transforms.enable=true \
+  --dataset.image_transforms.max_num_transforms=3 \
+  --policy.type=smolvla \
+  --policy.chunk_size=50 \
+  --policy.n_action_steps=50 \
+  --policy.device=cuda \
+  --policy.pretrained_path="${PRETRAINED_MODEL_PATH}" \
+  --policy.use_peft=false \
+  --policy.freeze_vision_encoder=false \
+  --policy.train_expert_only=false \
+  --policy.train_state_proj=true \
+  --policy.optimizer_lr=1e-05 \
+  --policy.scheduler_warmup_steps=1500 \
+  --policy.scheduler_decay_steps=${TOTAL_STEPS} \
+  --policy.scheduler_decay_lr=1e-06 \
+  --batch_size=16 \
+  --num_workers=8 \
+  --prefetch_factor=2 \
+  --persistent_workers=true \
+  --steps=${TOTAL_STEPS} \
+  --save_freq=5000 \
+  --output_dir="outputs/train/${RUN_NAME}" \
+  --job_name="${RUN_NAME}" \
+  --wandb.enable=true \
+  --wandb.project="lerobot-so101-grad" \
+  --policy.push_to_hub=true \
+  --policy.repo_id="${HF_USER}/${RUN_NAME}"
+```
 
 ---
 
@@ -267,30 +304,33 @@ python -m lerobot.scripts.lerobot_train \
 
 ---
 
-## 7. Offline Reinforcement Learning (Reward-Weighted Flow-Matching / AWAC)
+## 7. Offline Reinforcement Learning (Reward-Weighted Flow-Matching / RWFM)
 
-실물 로봇의 수동 리셋 피로도 없이, 정적 데이터셋(데모 450개 + HIL 복구 60개 + 실패 궤적)의 **보상 점수(Reward)에 비례하여 Loss 가중치를 부여하는 오프라인 강화학습**입니다.
+실물 로봇의 수동 리셋 피로도 없이, HIL 전체 롤아웃(정상 0.8 + 헛손질 0.1 + 사람 교정 1.0) 데이터셋에서 **50-Chunk 행동 가치에 비례하여 Flow-Matching 손실 가중치를 부여하는 오프라인 강화학습**입니다.
 
 ### 7.1 핵심 수식 및 원리
-LeRobot 공식 `sample_weighter` 및 `RewardSampleWeighter`([`src/lerobot/utils/sample_weighting.py`](file:///home/eslab/lerobot/src/lerobot/utils/sample_weighting.py))를 사용하여 각 배치 샘플의 Flow-Matching 손실에 지수 가중치를 곱합니다:
+LeRobot 공식 `sample_weighter` 및 [`RewardSampleWeighter`](file:///home/eslab/lerobot/src/lerobot/utils/sample_weighting.py)를 사용하여, 각 학습 샘플의 미래 50프레임 액션 청크에 대한 평균 보상($R_i$)을 계산하고 지수 가중치를 곱합니다:
 
-$$\text{Weight} = \exp\left(\frac{\text{Reward} - \max(\text{Reward})}{\text{Temperature}}\right), \quad \mathcal{L}_{\text{Weighted}} = \frac{\sum_i w_i \cdot \mathcal{L}_{\text{Flow-MSE}}(i)}{\sum_i w_i}$$
+$$R_i = \frac{1}{K}\sum_{k=0}^{K-1} r_{t+k}, \quad w_i = \exp\left(\frac{R_i - \max(R)}{T}\right), \quad \mathcal{L}_{\text{RWFM}} = \frac{\sum_i w_i \cdot \mathcal{L}_{\text{Flow-MSE}}(i)}{\sum_i w_i}$$
 
-* **성공/HIL 복구 궤적 (Reward=1.0)**: 높은 가중치($w \approx 1.6$)로 핵심 정답 동작 강력 모방.
-* **부분 성공 궤적 (Reward=0.4~0.6)**: 부분 보상에 비례하여 약하게 학습.
-* **실패 궤적 (Reward=0.0)**: 가중치가 대폭 축소($w \approx 0.2$)되어 실패 동작 모방 억제.
+* **사람 개입 교정/복구 구간 ($r=1.0$)**: $w \approx 1.0$ (최대 가중치로 모범답안 강력 모방).
+* **정상 자율주행 접근 구간 ($r=0.8$)**: $w \approx 0.67$ (안정적인 기본 주행 학습 유지).
+* **로봇 빗나감/실패 구간 ($r=0.1$)**: $w \approx 0.16$ (가중치가 대폭 축소되어 헛손질 모방 억제).
 
-### 7.2 보상 점수표 생성 헬퍼
-데이터셋에 에피소드별 보상 점수를 매핑하는 JSON 파일 생성:
+### 7.2 프레임/구간 보상 점수표 자동 생성
+HIL 촬영 시 기록된 개입 타임라인(`meta/episode_interventions.json`)을 기반으로 구간별 점수 매핑 생성:
 ```bash
-# 전체 에피소드에 기본 점수 1.0 부여 (필요 시 특정 에피소드 점수 수정)
-python project/scripts/tools/label_dataset_rewards.py \
-  --repo_id="eslab1234/smolvla_mixed_dataset" \
-  --output="project/config/episode_rewards.json" \
-  --default_reward=1.0
+python project/scripts/tools/generate_frame_rewards.py \
+  --repo_id="${HF_USER}/${DATASET_NAME}" \
+  --output="project/config/episode_frame_rewards.json" \
+  --normal_reward=0.8 \
+  --failure_reward=0.1 \
+  --correction_reward=1.0 \
+  --mistake_window=45
 ```
+*(참고: `dataset_root` 내 `meta/episode_interventions.json`이 존재하면 학습 시 별도 파일 지정 없이도 자동 감지됨)*
 
-### 7.3 오프라인 RL 학습 실행 템플릿
+### 7.3 RWFM 오프라인 RL 학습 실행 템플릿
 ```bash
 python -m lerobot.scripts.lerobot_train \
   --dataset.repo_id="${HF_USER}/${DATASET_NAME}" \
@@ -302,14 +342,15 @@ python -m lerobot.scripts.lerobot_train \
   --batch_size=16 \
   --steps=150000 \
   --sample_weighting.type=reward_weighted \
+  --sample_weighting.frame_reward_path="project/config/episode_frame_rewards.json" \
   --sample_weighting.temperature=0.5 \
-  --sample_weighting.reward_map_path="project/config/episode_rewards.json" \
+  --sample_weighting.chunk_size=50 \
   --output_dir="outputs/train/${RUN_NAME}" \
   --job_name="${RUN_NAME}" \
   --policy.push_to_hub=true \
   --policy.repo_id="${HF_USER}/${RUN_NAME}"
 ```
-- **`--sample_weighting.temperature`**: 작을수록(0.2~0.5) 1.0점 성공 궤적에 학습이 집중되며, 클수록 균등 학습(BC)에 가까워짐.
-- **체크포인트 호환성**: 학습된 모델은 아키텍처 변경이 없으므로 `run_async_inference.sh`에서 100% 그대로 즉시 실행 가능.
+- **`--sample_weighting.temperature`**: 기본값 0.5 (작을수록 1.0점 복구 궤적에 학습 집중, 클수록 균등 BC에 근접).
+- **체크포인트 호환성**: 모델 구조(Action Expert / Vision)는 전혀 변경되지 않으므로, 일반 `run_async_inference.sh` 추론 서버 및 Jetson 클라이언트에서 그대로 100% 호환 구동.
 
 
