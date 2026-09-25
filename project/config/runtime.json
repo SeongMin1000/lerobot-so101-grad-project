@@ -25,7 +25,7 @@
       "gripper.pos": 22.258916776750333
     },
     "stack_hover": {
-      "shoulder_pan.pos": -5.802197802197802,
+      "shoulder_pan.pos": 1.0,
       "shoulder_lift.pos": -14.813186813186814,
       "elbow_flex.pos": -19.736263736263737,
       "wrist_flex.pos": 80.08791208791209,

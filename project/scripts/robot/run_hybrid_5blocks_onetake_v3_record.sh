@@ -81,6 +81,8 @@ python -m lerobot.grad_project.recording.hybrid_record_5blocks_onetake_v3 \
   --hover_z_offset_m="$HOVER_Z_OFFSET_M" \
   --yolo_model_path="$YOLO_MODEL_PATH" \
   --grasp_calibration="$GRASP_CALIBRATION" \
-  --runtime_config="$RUNTIME_CONFIG" \
+  --pan_bias_direction="${PAN_BIAS_DIRECTION:-none}" \
+  --pan_bias_near_deg="${PAN_BIAS_NEAR_DEG:-0.0}" \
+  --pan_bias_far_deg="${PAN_BIAS_FAR_DEG:-0.0}" \
   --play_sounds="$PLAY_SOUNDS" \
   --resume="$RESUME"

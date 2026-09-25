@@ -11,12 +11,12 @@
       -0.08551606709030687
     ],
     [
-      0.013492029422821088,
-      0.1070229923864972,
-      0.02873292174645707
+      0.009837433230050442,
+      0.11611236582389992,
+      0.027500316629606707
     ]
   ],
-  "note": "2026-09-01 final refit, the two axes fitted differently because they fail differently. XY rows: residual-trimmed robust fit over ALL 1369 mined samples (best 70 percent, 6 iterations), trained on 958. The earlier absolute z<30mm cut deleted every sample past table y=+5cm (326 of them) because grasp height genuinely rises with reach, which left the whole far half extrapolating and made a block at y=+14.7 report reach 37.9cm and get refused. Held-out XY median on the far half: 36.6mm before, 16.9mm now. Z row: fitted to the LOW ENVELOPE -- the lowest quartile of grasp height within each y band (345 samples) -- because the mined z is contaminated upward by frames where the operator squeezed after lifting. Fitting all of z looks better against that contaminated target but puts the gripper ~20mm high in reality; the low envelope is what matched the arm live (grasp held at z=20mm front, where the all-sample fit asked for 40mm).",
+  "note": "2026-09-01 final refit, the two axes fitted differently because they fail differently. XY rows: residual-trimmed robust fit over ALL 1369 mined samples (best 70 percent, 6 iterations), trained on 958. The earlier absolute z<30mm cut deleted every sample past table y=+5cm (326 of them) because grasp height genuinely rises with reach, which left the whole far half extrapolating and made a block at y=+14.7 report reach 37.9cm and get refused. Held-out XY median on the far half: 36.6mm before, 16.9mm now. Z row: fitted to the LOW ENVELOPE -- the lowest quartile of grasp height within each y band (345 samples) -- because the mined z is contaminated upward by frames where the operator squeezed after lifting. Fitting all of z looks better against that contaminated target but puts the gripper ~20mm high in reality; the low envelope is what matched the arm live (grasp held at z=20mm front, where the all-sample fit asked for 40mm). | 2026-09-02 Z row refit against dwell-START grasp frames (345 low-envelope samples).",
   "source_points": [
     {
       "label": "ep1_green",

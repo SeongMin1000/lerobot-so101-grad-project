@@ -78,15 +78,63 @@ OBB_MODEL_PATH = "project/models/yolo_block_detector_obb/best.pt"
 DETECTOR_CONFIG_PATH = "project/config/detector.json"
 CAMERA_CALIBRATION_PATH = "project/config/camera_calibration.json"
 RUNTIME_CONFIG_PATH = "project/config/runtime.json"
+PIXEL_TO_ROBOT_PATH = "project/config/pixel_to_robot_homography.json"
 
-# UNVERIFIED on the real robot yet. The recalibrated table->robot affine
-# (2026-08-27) has a negative-determinant linear part -- i.e. table/camera
-# frame and robot frame are mirror images of each other, not just rotated.
-# That means a detected image-angle likely needs its SIGN flipped (not just
-# an additive offset) to become the correct wrist_roll direction. Default
-# guess is "flip"; confirm with one real block of known rotation before
-# trusting this, and flip to +1.0 if the wrist turns the wrong way.
-ANGLE_SIGN = -1.0
+
+def load_pixel_to_robot():
+    """Homography taking a top-camera pixel straight to robot-base XY, in metres.
+
+    The old route was pixel -> table cm -> robot, and its first leg was fitted
+    from the four corners of the 20x10cm target zone alone. Every block sits
+    OUTSIDE that quad, so every block's position was projective extrapolation,
+    and that error grows with distance in a way the affine second leg cannot
+    absorb -- grasps were excellent near the zone and drifted further out.
+    Fitting pixels to robot XY directly, from 1369 mined samples spread across
+    the whole working area, removes the extrapolation: held-out XY median goes
+    18.0mm -> 14.7mm overall, and the near-vs-far gap 3.6mm -> 0.6mm.
+
+    Z still comes from the table affine; this covers XY only."""
+    data = json.loads((lerobot_root() / PIXEL_TO_ROBOT_PATH).read_text())
+    return np.array(data["homography_pixel_to_robot_xy_m"], dtype=np.float64)
+
+
+def pixel_to_robot_xy(px: float, py: float, h: np.ndarray) -> np.ndarray:
+    q = h @ np.array([px, py, 1.0])
+    return q[:2] / q[2]
+
+
+def image_to_table_rotation_deg(px: float, py: float, homography: np.ndarray) -> float:
+    """How far the image's x axis is rotated from the table's, right at (px, py).
+
+    The detector reports a block's angle in IMAGE space, and it was being fed
+    straight into a table-frame calculation as if the two frames were aligned.
+    They are only aligned near the target zone, where the pixel->table
+    homography was fitted; measured across the frame the local rotation runs
+    from +1.8deg to -3.0deg. Small, but it is free to correct and it is pure
+    error otherwise."""
+    a = pixel_to_table_xy(px, py, homography)
+    b = pixel_to_table_xy(px + 10.0, py, homography)
+    return float(np.degrees(np.arctan2(b[1] - a[1], b[0] - a[0])))
+
+# VERIFIED 2026-09-01, after being wrong all along. Was -1.0, a guess made from
+# the recalibrated affine having a negative-determinant linear part.
+#
+# It could not be settled by eye for a long time because most blocks landed near
+# 0 or near 45deg, where the two signs give the same grip on a square block. The
+# case that decided it: a block at +19.3deg in the table frame, seen from an
+# azimuth of +68.1deg.
+#
+#     ANGLE_SIGN -1 -> wrist -41.2deg -> jaws at -14.0deg, 33.3deg off the block
+#     ANGLE_SIGN +1 -> wrist  -2.6deg -> jaws at +21.6deg,  2.3deg off
+#
+# and the operator's report of that exact attempt was "if it had turned slightly
+# clockwise, or not turned at all, it would have gripped" -- which is +1's
+# near-zero turn. Computation and observation agree.
+#
+# To re-check this if anything upstream changes: use a block at roughly 22deg.
+# That is where the two signs differ by the full 44deg. A block at 0 or 45
+# proves nothing no matter how carefully it is watched.
+ANGLE_SIGN = 1.0
 
 # Constant wrist twist added on top of the block's own angle, in degrees.
 # Set to 15.0 for one run on 2026-09-01 after the jaws sat ~15deg off on a
@@ -257,8 +305,21 @@ DROP_CLEARANCE_M = 0.012
 #
 # Sign in plain terms, to avoid the top/bottom confusion that got this backwards
 # once already: POSITIVE moves the grip toward the robot, NEGATIVE away from it.
-TCP_JAW_OFFSET_M = 0.012
-TCP_FORWARD_OFFSET_M = 0.010
+# MEASURED 2026-09-01 with tcp_circle_probe.py, not guessed. The arm was sent to
+# the same point seven times with only the wrist angle changed; the marks it left
+# fit a circle of radius 10.5mm (residuals: 0.6mm median, 2.2mm worst), centred
+# 9.4mm to the top-camera-left and 4.2mm away from the robot of the first mark.
+# That circle IS the offset between gripper_frame_link, which IK positions, and
+# the point the jaws actually close on. Decomposed onto the tool axes it is
+# -9.1mm along the jaw axis and -4.5mm along tool_x, so the target moves the
+# other way by the same amount. Cross-check: the decomposed vector is 10.2mm
+# long against the circle's 10.5mm radius.
+#
+# The earlier hand-tuned values (jaw 12mm, forward 10mm) had the right direction
+# but were too big, forward especially -- which is what pushed the grip onto the
+# block's corner and made it slip.
+TCP_JAW_OFFSET_M = 0.0091
+TCP_FORWARD_OFFSET_M = 0.0045
 
 
 class IKDivergedError(RuntimeError):
@@ -567,11 +628,18 @@ def close_gripper_until_resistance(robot, current: np.ndarray, dry_run: bool) ->
 
 
 class BlockDetection:
-    __slots__ = ("color", "cx", "cy", "angle_deg", "conf", "in_target")
+    __slots__ = ("color", "cx", "cy", "angle_deg", "raw_angle_deg", "conf", "in_target")
 
-    def __init__(self, color, cx, cy, angle_deg, conf, in_target):
+    def __init__(self, color, cx, cy, angle_deg, conf, in_target, raw_angle_deg=None):
         self.color, self.cx, self.cy = color, cx, cy
         self.angle_deg, self.conf, self.in_target = angle_deg, conf, in_target
+        # What the model reported before the 4-fold symmetry fold. Kept only so
+        # the log can show it: a block the model reads near +-45deg folds to
+        # either sign on the slightest jitter, which swings the wrist ~88deg
+        # between attempts and looks like it turned the wrong way entirely. Both
+        # choices grip a square block identically, but without the raw number in
+        # the log there is no way to tell that apart from a real fault.
+        self.raw_angle_deg = angle_deg if raw_angle_deg is None else raw_angle_deg
 
 
 class ObbBlockDetector:
@@ -620,10 +688,10 @@ class ObbBlockDetector:
             if color in best_per_color and best_per_color[color].conf >= conf:
                 continue
             cx, cy, _w, _h, r = obb.xywhr[i].tolist()
-            angle_deg = np.degrees(r)
-            angle_deg = ((angle_deg + 45.0) % 90.0) - 45.0  # square block, 4-fold symmetry
+            raw_deg = float(np.degrees(r))
+            angle_deg = ((raw_deg + 45.0) % 90.0) - 45.0  # square block, 4-fold symmetry
             in_target = self._inset_polygon is not None and _point_in_polygon(cx, cy, self._inset_polygon)
-            best_per_color[color] = BlockDetection(color, cx, cy, angle_deg, conf, in_target)
+            best_per_color[color] = BlockDetection(color, cx, cy, angle_deg, conf, in_target, raw_deg)
 
         return list(best_per_color.values())
 
@@ -768,7 +836,7 @@ def restore_arm_overload_torque(robot, previous: dict[str, int]) -> None:
 
 
 def pick_one_block(
-    kin, robot, detector, homography, calib, pitch_model,
+    kin, robot, detector, homography, calib, pitch_model, pix2robot,
     current: np.ndarray, floor_z: float, dry_run: bool,
     unreachable: set[str], placed_count: int,
 ) -> tuple[np.ndarray, str, str | None]:
@@ -802,7 +870,10 @@ def pick_one_block(
         print(f"  unreachable: table coords ({table_x_cm:.1f},{table_y_cm:.1f})cm way outside "
               f"the known workspace -- treating as a bad detection, not moving toward it")
         return current, "unreachable", block.color
+    # XY from the direct pixel homography, Z from the table affine (which the
+    # homography does not model). See load_pixel_to_robot().
     target_xyz = apply_table_to_robot(table_x_cm, table_y_cm, calib)
+    target_xyz = np.array([*pixel_to_robot_xy(block.cx, block.cy, pix2robot), target_xyz[2]])
     reach = float(np.linalg.norm(target_xyz[:2]))
 
     print(
@@ -822,6 +893,9 @@ def pick_one_block(
     # Near blocks are unaffected -- their first candidate is the model's own tilt
     # and it solves immediately. Leaning further only ever gets tried when the
     # arm could not otherwise reach at all.
+    # The detector's angle is measured against the IMAGE axes; everything below
+    # works in the table/robot frame. Rotate it across.
+    block_angle_table = block.angle_deg + image_to_table_rotation_deg(block.cx, block.cy, homography)
     model_tilt = pitch_model.tilt_for(reach) if pitch_model else 0.0
     tilt_candidates = [model_tilt] + [t for t in (model_tilt + 10.0, model_tilt + 20.0,
                                                   model_tilt + 30.0, model_tilt + 40.0)
@@ -833,7 +907,7 @@ def pick_one_block(
     for tilt_deg in tilt_candidates:
         base_orientation = orientation_from_tilt(target_xyz, tilt_deg)
         azimuth_deg = float(np.degrees(np.arctan2(target_xyz[1], target_xyz[0])))
-        wrist_deg = ANGLE_SIGN * block.angle_deg + WRIST_OFFSET_DEG + azimuth_deg
+        wrist_deg = ANGLE_SIGN * block_angle_table + WRIST_OFFSET_DEG + azimuth_deg
         wrist_deg = ((wrist_deg + 45.0) % 90.0) - 45.0
         orientation = rotate_about_local_z(base_orientation, np.deg2rad(wrist_deg))
         grasp_xyz = (target_xyz + orientation[:, 1] * TCP_JAW_OFFSET_M
@@ -854,8 +928,11 @@ def pick_one_block(
             raise last_err if last_err is not None else IKDivergedError("no tilt candidate solved")
         if tilt_deg > model_tilt:
             print(f"  (leaned further to reach it: tilt {model_tilt:.1f} -> {tilt_deg:.1f}deg)")
-        print(f"  tilt={tilt_deg:.1f}deg block_angle={block.angle_deg:+.1f}deg (image) -> "
-              f"wrist {ANGLE_SIGN * block.angle_deg:+.1f} + azimuth {azimuth_deg:+.1f} = {wrist_deg:+.1f}deg")
+        near_flip = abs(abs(block.angle_deg) - 45.0) < 8.0
+        print(f"  tilt={tilt_deg:.1f}deg block_angle={block.angle_deg:+.1f}deg "
+              f"(raw {block.raw_angle_deg:+.1f}, table {block_angle_table:+.1f}) -> wrist {ANGLE_SIGN * block_angle_table:+.1f} "
+              f"+ azimuth {azimuth_deg:+.1f} = {wrist_deg:+.1f}deg"
+              + ("   << 45도 경계 근처: 다음 시도에 부호가 뒤집힐 수 있음 (둘 다 같은 그립)" if near_flip else ""))
         target_xyz = grasp_xyz
     except IKDivergedError as e:
         print(f"  unreachable: hover point doesn't converge: {e}")
@@ -950,6 +1027,7 @@ def main() -> None:
     calib = load_calibration(calib_path)
     homography = load_homography(CAMERA_CALIBRATION_PATH)
     pitch_model = GraspPitchModel.load()
+    pix2robot = load_pixel_to_robot()
     floor_z = floor_z_from_calibration(calib)
     print(f"floor_z={floor_z*1000:.1f}mm  GraspPitchModel={'loaded' if pitch_model else 'MISSING (tilt=0 fallback)'}")
 
@@ -1003,7 +1081,7 @@ def main() -> None:
             current = ramp_to(robot, current, observe_pose, RAMP_STEPS, args.dry_run)
 
             current, outcome, color = pick_one_block(
-                kin, robot, detector, homography, calib, pitch_model,
+                kin, robot, detector, homography, calib, pitch_model, pix2robot,
                 current, floor_z, args.dry_run, unreachable, placed_count,
             )
 

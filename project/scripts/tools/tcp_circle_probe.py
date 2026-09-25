@@ -55,7 +55,17 @@ from lerobot.robots import make_robot_from_config
 from lerobot.robots.so_follower import SO101FollowerConfig
 
 TEST_POINT_CM = (8.0, -3.0)
-WRIST_ANGLES_DEG = [0.0, -150.0, -100.0, -50.0, 50.0, 100.0, 150.0]
+# Relative turns, chosen so wrist_roll stays inside its real travel. lerobot
+# normalises every arm joint to -100..+100 over its calibrated tick range
+# (wrist_roll: 1350..3110 ticks = 154.7 physical degrees), so anything past
+# +-100 is simply not commandable. The first version of this asked for +-150,
+# which came out as wrist_roll +-154, and the motor stopped dead at 76 while the
+# goal kept climbing -- read as a stall by the watchdog. These seven span about
+# 160deg of turn, which is plenty to fit a circle to.
+WRIST_ANGLES_DEG = [0.0, -80.0, -55.0, -28.0, 28.0, 55.0, 80.0]
+
+# Refuse any pose that lands a joint outside its usable travel, with margin.
+JOINT_LIMIT = 92.0
 GRIPPER_MARK_POS = 15.0          # nearly closed: one clean mark, not two jaw prints
 # 70, not the 20 that tcp_offset_probe.py uses. 20% was copied over from that
 # tool and is simply not enough for this arm to lift itself out of the folded
@@ -111,6 +121,11 @@ def main() -> None:
                                              keep_orientation=ori)
         except npp.IKDivergedError as e:
             print(f"  손목 {ang:+.0f}도 : 계산 실패, 건너뜀 ({str(e).splitlines()[0][:60]})")
+            continue
+        over = [(n, q_turn[j]) for j, n in enumerate(npp.JOINT_ORDER[:5]) if abs(q_turn[j]) > JOINT_LIMIT]
+        if over:
+            print(f"  회전 {ang:+.0f}도 : 관절 한계 초과, 건너뜀 -- "
+                  + ", ".join(f"{n} {v:+.0f}도" for n, v in over))
             continue
         plan.append((ang, ori, q_hover, q_turn))
         # `ang` is a turn RELATIVE to the nominal grasp orientation, which already
