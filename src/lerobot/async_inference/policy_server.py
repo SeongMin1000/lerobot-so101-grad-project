@@ -154,10 +154,18 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.actions_per_chunk = policy_specs.actions_per_chunk
         self._logged_policy_input_stats = False
 
+        model_path = policy_specs.pretrained_name_or_path
+        if not Path(model_path).exists():
+            for base_dir in [Path.cwd(), Path(__file__).resolve().parents[3], Path.home() / "lerobot"]:
+                candidate = base_dir / model_path
+                if candidate.exists():
+                    model_path = str(candidate)
+                    break
+
         policy_class = get_policy_class(self.policy_type)
 
         start = time.perf_counter()
-        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
+        self.policy = policy_class.from_pretrained(model_path)
         self.policy.to(self.device)
 
         # Load preprocessor and postprocessor, overriding device to match requested device
@@ -169,7 +177,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             preprocessor_overrides["rename_observations_processor"] = {"rename_map": policy_specs.rename_map}
         self.preprocessor, self.postprocessor = make_pre_post_processors(
             self.policy.config,
-            pretrained_path=policy_specs.pretrained_name_or_path,
+            pretrained_path=model_path,
             preprocessor_overrides=preprocessor_overrides,
             postprocessor_overrides={"device_processor": device_override},
         )
@@ -397,6 +405,28 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self._capture_debug_observation(observation_t, observation, "policy")
         self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
+
+        # Auto-alias camera keys between client convention and policy expected features:
+        # e.g., camera1/camera2/camera3 <-> top/wrist/belly
+        if hasattr(self.policy, "config") and hasattr(self.policy.config, "image_features"):
+            expected_img_keys = set(self.policy.config.image_features.keys())
+            if not any(k in observation for k in expected_img_keys):
+                alias_pairs = [
+                    ("observation.images.camera1", "observation.images.top"),
+                    ("observation.images.camera2", "observation.images.wrist"),
+                    ("observation.images.camera3", "observation.images.belly"),
+                ]
+                for c_key, raw_key in alias_pairs:
+                    if raw_key in expected_img_keys and c_key in observation and raw_key not in observation:
+                        observation[raw_key] = observation[c_key]
+                        self.logger.warning(
+                            f"[AUTO-ALIAS] Mapped incoming {c_key} -> {raw_key} to match policy image_features"
+                        )
+                    elif c_key in expected_img_keys and raw_key in observation and c_key not in observation:
+                        observation[c_key] = observation[raw_key]
+                        self.logger.warning(
+                            f"[AUTO-ALIAS] Mapped incoming {raw_key} -> {c_key} to match policy image_features"
+                        )
 
         if not self._logged_policy_input_stats:
             for key, value in observation.items():

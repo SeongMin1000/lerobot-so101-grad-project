@@ -102,6 +102,9 @@ export CAMERA_KEY_MODE="${CAMERA_KEY_MODE:-policy}"
 # Server Address (Override with SERVER_ADDRESS="ip:port")
 export SERVER_ADDRESS="${SERVER_ADDRESS:-100.85.69.64:8080}"
 
+# HIL Recording Mode (Default to corrections_only so human recovery/corrections are committed as episodes)
+export RECORD_MODE="${RECORD_MODE:-corrections_only}"
+
 printf '⚙️  [Config] MAX_RELATIVE_TARGET: %s deg/step\n' "$MAX_RELATIVE_TARGET"
 
 # Execute unified async launcher
