@@ -444,7 +444,9 @@ class RewardSampleWeighter(SampleWeighter):
         except Exception as e:
             logging.warning("RewardSampleWeighter: failed to parse frame reward file %s: %s", p, e)
 
-    def compute_batch_weights(self, batch: dict) -> tuple[torch.Tensor, dict]:
+    def compute_batch_weights(
+        self, batch: dict, learn_mask: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, dict]:
         batch_size = self._determine_batch_size(batch)
 
         # 1. Frame-level Chunk Reward weighting (if frame rewards and batch indices exist)
@@ -452,8 +454,12 @@ class RewardSampleWeighter(SampleWeighter):
             ep_indices = batch["episode_index"].cpu().view(-1).tolist()
             frame_indices = batch["frame_index"].cpu().view(-1).tolist()
 
+            # Optional learn mask: shape [B, K] where True = learnable, False = failure/mask
+            learn_mask_tensor = learn_mask if learn_mask is not None else batch.get("rwfm_learn_mask")
+            pad_mask_tensor = batch.get("action_is_pad")
+
             chunk_rewards = []
-            for ep_idx, f_idx in zip(ep_indices, frame_indices):
+            for b_idx, (ep_idx, f_idx) in enumerate(zip(ep_indices, frame_indices)):
                 ep_int = int(ep_idx)
                 f_int = int(f_idx)
                 if ep_int in self.ep_frame_rewards:
@@ -465,13 +471,35 @@ class RewardSampleWeighter(SampleWeighter):
                     start = min(max(0, f_int), n - 1)
                     end = min(start + self.chunk_size, n)
                     slice_r = arr[start:end]
-                    if len(slice_r) == 0:
+                    chunk_len = len(slice_r)
+                    if chunk_len == 0:
                         chunk_rewards.append(self.default_reward)
-                    elif self.gamma == 1.0 or len(slice_r) == 1:
-                        chunk_rewards.append(float(slice_r.mean()))
+                        continue
+
+                    # If learn_mask or pad_mask is present, exclude failure and padding actions
+                    if learn_mask_tensor is not None or pad_mask_tensor is not None:
+                        valid_m = np.ones(chunk_len, dtype=bool)
+                        if learn_mask_tensor is not None:
+                            lm = learn_mask_tensor[b_idx, :chunk_len].cpu().numpy().astype(bool)
+                            valid_m = valid_m & lm
+                        if pad_mask_tensor is not None:
+                            pm = pad_mask_tensor[b_idx, :chunk_len].cpu().numpy().astype(bool)
+                            valid_m = valid_m & (~pm)
+
+                        valid_slice = slice_r[valid_m]
+                        if len(valid_slice) == 0:
+                            chunk_rewards.append(self.default_reward)
+                        elif self.gamma == 1.0 or len(valid_slice) == 1:
+                            chunk_rewards.append(float(valid_slice.mean()))
+                        else:
+                            w = self.discount_weights[:chunk_len][valid_m]
+                            chunk_rewards.append(float(np.dot(valid_slice, w) / w.sum()))
                     else:
-                        w = self.discount_weights[: len(slice_r)]
-                        chunk_rewards.append(float(np.dot(slice_r, w) / w.sum()))
+                        if self.gamma == 1.0 or len(slice_r) == 1:
+                            chunk_rewards.append(float(slice_r.mean()))
+                        else:
+                            w = self.discount_weights[: len(slice_r)]
+                            chunk_rewards.append(float(np.dot(slice_r, w) / w.sum()))
                 elif ep_int in self.reward_map:
                     chunk_rewards.append(self.reward_map[ep_int])
                 else:

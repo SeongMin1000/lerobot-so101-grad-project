@@ -1,0 +1,19 @@
+{
+  "normal": {
+    "reward": 0.0,
+    "learn": true
+  },
+  "self_correction": {
+    "reward": 0.4,
+    "learn": true
+  },
+  "human_correction": {
+    "reward": 0.6,
+    "learn": true
+  },
+  "failure": {
+    "reward": -1.0,
+    "learn": false
+  },
+  "temperature": 1.0
+}

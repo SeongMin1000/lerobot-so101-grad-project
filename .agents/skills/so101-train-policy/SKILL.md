@@ -353,4 +353,21 @@ python -m lerobot.scripts.lerobot_train \
 - **`--sample_weighting.temperature`**: 기본값 0.5 (작을수록 1.0점 복구 궤적에 학습 집중, 클수록 균등 BC에 근접).
 - **체크포인트 호환성**: 모델 구조(Action Expert / Vision)는 전혀 변경되지 않으므로, 일반 `run_async_inference.sh` 추론 서버 및 Jetson 클라이언트에서 그대로 100% 호환 구동.
 
+---
+
+## 8. Training Family C: Unified General Expert-Only RWFM + Same-Color PCGrad
+
+> **전용 스킬 문서**: 상세 아키텍처, 725ep 데이터셋 규약, Multi-rate 케이던스 및 CLI 옵션은 [`so101-smolvla-rwfm-pcgrad`](file:///home/eslab/lerobot/.agents/skills/so101-smolvla-rwfm-pcgrad/SKILL.md)를 참조하십시오.
+
+### 8.1 핵심 개요
+* **목표**: 725ep 통합 일반 데이터셋 기반 오프라인 RWFM(미래 50액션 failure 마스킹 + 보상 지수 가중치)과 태스크 간 배치 상충을 해소하는 Same-Color PCGrad(5색 순환 투영)를 단일 Optimizer 루프 안에서 동시 실행.
+* **학습 범위**: Action Expert 153개 텐서 (99.85M 파라미터) 전용 학습 (VLM Backbone, Vision Encoder, State Projection 완전 동결).
+* **정규화 통계**: 865 베이스 모델 Normalizer 통계 잠금 (`policy_preprocessor_step_5_normalizer_processor.safetensors`).
+* **실행 명령**:
+  ```bash
+  cd /home/eslab/lerobot
+  nohup bash project/scripts/gpu/train_smolvla_865_rwfm_pcgrad_combined.sh > train_30k.log 2>&1 &
+  ```
+
+
 

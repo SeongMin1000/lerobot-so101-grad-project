@@ -112,7 +112,8 @@ class HILRecordConfig(ObserveRecordConfig):
     aggregate_fn_name: str = "latest_only"
     server_rpc_timeout_s: float = 3.0
 
-    record_mode: str = "corrections_only"  # "corrections_only" | "full_on_intervention"
+    record_mode: str = "corrections_only"  # "corrections_only" | "full_on_intervention" | "rwfm_rollout"
+    failure_tail_frames: int = 0
 
     leader_handover_duration_s: float = 1.2
     leader_handover_fps: int = 30
@@ -147,8 +148,8 @@ class HILRecordConfig(ObserveRecordConfig):
             raise ValueError("--server_address must not be empty")
         if not self.pretrained_name_or_path.strip():
             raise ValueError("--pretrained_name_or_path must name the deployed SmolVLA checkpoint")
-        if self.record_mode not in {"full_on_intervention", "corrections_only"}:
-            raise ValueError("--record_mode must be 'full_on_intervention' or 'corrections_only'")
+        if self.record_mode not in {"full_on_intervention", "corrections_only", "rwfm_rollout"}:
+            raise ValueError("--record_mode must be 'full_on_intervention', 'corrections_only', or 'rwfm_rollout'")
         if self.actions_per_chunk < 2:
             raise ValueError("HIL resume requires --actions_per_chunk >= 2")
         if not 0 <= self.chunk_size_threshold <= 1:
@@ -174,6 +175,7 @@ class HILPhase(str, enum.Enum):
     OBSERVE_RECORDING = "observe_recording"
     STACK_RECORDING = "stack_recording"
     REVIEW_PAUSED = "review_paused"
+    RWFM_EVALUATION_PAUSED = "rwfm_evaluation_paused"
 
     # Backward compatibility aliases
     PAUSED = "intervention_paused"
@@ -200,6 +202,8 @@ class HILCommand(str, enum.Enum):
     RESUME_AUTONOMOUS_VIA_OBSERVE = "resume_autonomous_via_observe"
     NEXT_TRIAL = "next_trial"
     STOP = "stop"
+    SET_SELF_CORRECTION = "set_self_correction"
+    SET_FAILURE = "set_failure"
 
     # Backward compatibility aliases
     TOGGLE_POLICY = "pause_intervention"
@@ -254,6 +258,10 @@ def decode_hil_key_bytes(data: bytes) -> list[HILCommand]:
                 commands.append(HILCommand.RESUME_AUTONOMOUS_VIA_OBSERVE)
             elif byte in {b"n", b"N"}:
                 commands.append(HILCommand.NEXT_TRIAL)
+            elif byte in {b"s", b"S"}:
+                commands.append(HILCommand.SET_SELF_CORRECTION)
+            elif byte in {b"f", b"F"}:
+                commands.append(HILCommand.SET_FAILURE)
             elif byte in {b"q", b"Q", b"\x03", b"\x1b"}:
                 commands.append(HILCommand.STOP)
     return commands
@@ -587,6 +595,20 @@ def _wait_for_trial_ready(
 
 def _print_active_controls(record_mode: str = "corrections_only") -> None:
     print()
+    if record_mode == "rwfm_rollout":
+        print(f"[RWFM ROLLOUT CONTROLS - {record_mode.upper()} - terminal focus required]")
+        print("  SPACE       자율추론 정지 -> 직전 구간 평가 대기 / 평가 후 Commit 및 재개 (Resume)")
+        print("  S           (평가 일시정지 중) 직전 구간 SELF_CORRECTION (+0.4, learn=true)")
+        print("  F           (평가 일시정지 중) 직전 구간 FAILURE (-1.0, learn=false)")
+        print("  ENTER / C   Rollout 종료 -> Review 모드 진입 (직전 구간 라벨 커밋)")
+        print("  →           현재 Rollout 에피소드 및 어노테이션 저장")
+        print("  ←           현재 Rollout 에피소드 및 어노테이션 폐기")
+        print("  R           Observe 복귀 (미녹화) + 동일 Trial 처음부터 재시작")
+        print("  N           Observe 복귀 (미녹화) + 현재 Trial 종료 및 다음 Trial 준비")
+        print("  Q or ESC    즉시 안전 종료")
+        print()
+        return
+
     print(f"[HIL CONTROLS - {record_mode.upper()} - terminal focus required]")
     print("  SPACE       자율추론 일시정지 / 현 위치에서 재개 (Pause/Resume 토글)")
     print("  R           OBSERVE 복귀 (미녹화) + 처음부터 추론 재시작 (Trial Reset)")
@@ -833,6 +855,14 @@ class HILSession:
         self._current_recovery_type: str | None = None
         self._current_target_block: str | None = None
         self._recorded_correction_frames = 0
+        self._recorded_autonomous_frames = 0
+
+        # RWFM Rollout semantic segment tracking
+        self._rwfm_segments: list[dict[str, Any]] = []
+        self._rwfm_segment_start_frame: int = 0
+        self._rwfm_paused_frame_count: int = 0
+        self._rwfm_pending_label: str = "normal"
+        self._rwfm_outcome: str = "grasp_success"
 
         self.hover_resolver = HardcodedHoverResolver(self.cfg)
         self._cached_block_coords: dict[str, np.ndarray] = {}
@@ -841,8 +871,8 @@ class HILSession:
         pre_sec = float(getattr(self.cfg, "pre_intervention_seconds", 1.5))
         self.pre_buffer_maxlen = max(0, int(round(self.cfg.dataset.fps * pre_sec)))
         self.pre_intervention_buffer: deque[dict] = deque(maxlen=self.pre_buffer_maxlen)
-        if self.cfg.record_mode == "corrections_only":
-            print("🚫 [PRE-BUFFER BYPASSED] Correction-Only 모드: 실패 구간 버퍼링 비활성화 (L/O 시점부터만 기록)")
+        if self.cfg.record_mode in {"corrections_only", "rwfm_rollout"}:
+            print("🚫 [PRE-BUFFER BYPASSED] 실패 구간 버퍼링 비활성화 (실시간 프레임 기록 또는 개입 시점부터만 기록)")
         elif self.pre_buffer_maxlen > 0:
             print(f"📼 [PRE-BUFFER INIT] 실패 직전 {pre_sec:.1f}초 ({self.pre_buffer_maxlen}프레임) 롤링 프리버퍼 활성화")
 
@@ -850,7 +880,7 @@ class HILSession:
         real_count = _pending_frame_count(self.dataset)
         if real_count > 0:
             return real_count
-        return self._recorded_correction_frames
+        return max(self._recorded_correction_frames, self._recorded_autonomous_frames)
 
     def _flush_pre_intervention_buffer(self) -> int:
         """Flushes rolling pre-intervention frames (only used in full_on_intervention mode)."""
@@ -1375,12 +1405,40 @@ class HILSession:
         expected = self._expected_episode_index
         self.dataset.save_episode()
         self._recorded_correction_frames = 0
+        self._recorded_autonomous_frames = 0
         if self.dataset.num_episodes != expected + 1:
             raise RuntimeError(
                 f"HIL save verification failed: expected {expected + 1} episodes, "
                 f"found {self.dataset.num_episodes}"
             )
         self.saved_corrections += 1
+
+        if self.cfg.record_mode == "rwfm_rollout":
+            self._record_rwfm_rollout_annotations(
+                episode_index=expected,
+                physical_trial=self.physical_trial,
+                task=self.cfg.dataset.single_task,
+                target_block=self._current_target_block or "unknown",
+                outcome=self._rwfm_outcome,
+                segments=self._rwfm_segments,
+            )
+            self._rwfm_segments = []
+            self._expected_episode_index = None
+            self._correction_started_at = None
+            self._current_recovery_type = None
+            self.phase = HILPhase.INTERVENTION_PAUSED
+            print(
+                f"\n🎉 [SAVED] RWFM Rollout 에피소드 {expected} 저장 완료! "
+                f"({frame_count} 프레임, 누적 {self.saved_corrections}/{self.cfg.dataset.num_episodes}, outcome={self._rwfm_outcome})"
+            )
+            print("   👉 N: 현재 Trial 완료 및 다음 블록 준비")
+            print("   👉 R: OBSERVE 복귀 (미녹화) + 처음부터 자율추론 재시작 (Trial Reset)")
+            print("   👉 Q/ESC: 즉시 세션 종료")
+            print("=" * 78)
+            if self.saved_corrections >= self.cfg.dataset.num_episodes:
+                return TrialOutcome.TARGET_REACHED
+            return True
+
         task_phase = "stack" if self._current_recovery_type == "stack_hover" else "grasp"
         self._record_episode_intervention_meta(
             episode_index=expected,
@@ -1511,6 +1569,7 @@ class HILSession:
                 reason=reason,
             )
         self._recorded_correction_frames = 0
+        self._recorded_autonomous_frames = 0
         self._expected_episode_index = None
         self._correction_started_at = None
         self._current_recovery_type = None
@@ -1575,7 +1634,7 @@ class HILSession:
                 "task_phase": task_phase,
                 "target_block": target_block,
                 "total_frames": total_frames,
-                "intervention_start_frame": 0,
+                "intervention_start_frame": int(self.intervention_start_frame or 0),
                 "timestamp": time.time(),
             }
             with open(meta_path, "w", encoding="utf-8") as f:
@@ -1589,6 +1648,69 @@ class HILSession:
         except Exception as e:
             print(f"[METADATA WARN] Failed to save intervention metadata: {e}")
 
+    def _commit_rwfm_segment(self, label: str) -> None:
+        """Commit the previous segment [start, end) with semantic label."""
+        start = self._rwfm_segment_start_frame
+        end = self._rwfm_paused_frame_count
+        if end <= start:
+            return
+        if label == "failure" and self.cfg.failure_tail_frames > 0 and (end - start) > self.cfg.failure_tail_frames:
+            split_pt = end - self.cfg.failure_tail_frames
+            self._rwfm_segments.append({"start": start, "end": split_pt, "type": "normal"})
+            self._rwfm_segments.append({"start": split_pt, "end": end, "type": "failure"})
+        else:
+            self._rwfm_segments.append({"start": start, "end": end, "type": label})
+        self._rwfm_segment_start_frame = end
+        print(f"✅ [RWFM COMMIT] Segment committed: [{start}, {end}) -> {label} (누적 {len(self._rwfm_segments)} segments)")
+
+    def _record_rwfm_rollout_annotations(
+        self,
+        *,
+        episode_index: int,
+        physical_trial: int,
+        task: str,
+        target_block: str,
+        outcome: str,
+        segments: list[dict[str, Any]],
+    ) -> None:
+        """Saves semantic segment annotations for RWFM rollout analysis and training."""
+        try:
+            meta_dir = Path(self.dataset.root) / "meta"
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = meta_dir / "rwfm_rollout_annotations.json"
+
+            data: dict[str, Any] = {"schema_version": 1, "episodes": {}}
+            if meta_path.exists():
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    try:
+                        data = json.load(f)
+                    except Exception:
+                        data = {"schema_version": 1, "episodes": {}}
+
+            if "episodes" not in data:
+                data["episodes"] = {}
+
+            data["episodes"][str(episode_index)] = {
+                "episode_index": episode_index,
+                "physical_trial": physical_trial,
+                "task": task,
+                "target_block": target_block,
+                "outcome": outcome,
+                "segments": segments,
+            }
+
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            print(
+                f"📝 [RWFM ANNOTATION] 에피소드 {episode_index}: "
+                f"trial={physical_trial}, target={target_block}, "
+                f"outcome={outcome}, segments={len(segments)} -> {meta_path}"
+            )
+        except Exception as e:
+            print(f"[METADATA ERROR] Failed to save RWFM rollout annotations: {e}")
+            raise
+
     def _autonomous_tick(self) -> None:
         performed_action = None
         if self.client.actions_available():
@@ -1597,7 +1719,9 @@ class HILSession:
             self.client.control_loop_observation(self.cfg.dataset.single_task)
 
         if performed_action is not None:
-            should_record_full = self.cfg.record_mode == "full_on_intervention" and self.is_trial_recording
+            should_record_full = (
+                self.cfg.record_mode in {"full_on_intervention", "rwfm_rollout"}
+            ) and self.is_trial_recording
 
             if should_record_full or self.cfg.display_data:
                 observation = self.robot.get_observation()
@@ -1620,6 +1744,7 @@ class HILSession:
 
                 if should_record_full:
                     self.dataset.add_frame(frame_data)
+                    self._recorded_autonomous_frames += 1
 
                 if self.cfg.display_data:
                     log_rerun_data(
@@ -1669,15 +1794,67 @@ class HILSession:
             )
 
     def _handle_command(self, command: HILCommand) -> TrialOutcome | None:
+        if command is HILCommand.SET_SELF_CORRECTION:
+            if self.cfg.record_mode == "rwfm_rollout" and self.phase is HILPhase.RWFM_EVALUATION_PAUSED:
+                self._rwfm_pending_label = "self_correction"
+                print(
+                    f"\n[PENDING] SELF_CORRECTION (reward=+0.4, learn=true) for "
+                    f"[{self._rwfm_segment_start_frame}, {self._rwfm_paused_frame_count})"
+                )
+            return None
+
+        if command is HILCommand.SET_FAILURE:
+            if self.cfg.record_mode == "rwfm_rollout" and self.phase is HILPhase.RWFM_EVALUATION_PAUSED:
+                self._rwfm_pending_label = "failure"
+                print(
+                    f"\n[PENDING] FAILURE (reward=-1.0, learn=false) for "
+                    f"[{self._rwfm_segment_start_frame}, {self._rwfm_paused_frame_count})"
+                )
+            return None
+
         if command is HILCommand.STOP:
-            if self.phase in HIL_RECORDING_PHASES or self.phase is HILPhase.REVIEW_PAUSED:
+            if self.phase in HIL_RECORDING_PHASES or self.phase in {
+                HILPhase.REVIEW_PAUSED,
+                HILPhase.RWFM_EVALUATION_PAUSED,
+            }:
                 self._discard_pending_correction("HIL stop requested")
+                self._rwfm_segments = []
             self._pause_without_leader_motion()
             _disable_leader_torque(self.teleop)
             print("[STOP] Automatic observe return skipped for safety")
             return TrialOutcome.STOP
 
         if command is HILCommand.PAUSE_INTERVENTION:
+            if self.cfg.record_mode == "rwfm_rollout":
+                if self.phase is HILPhase.AUTONOMOUS:
+                    _hold_follower_at_measured_position(self.robot)
+                    self.client.pause_policy_control()
+                    _hold_follower_at_measured_position(self.robot)
+                    self.is_trial_recording = False
+                    self._rwfm_paused_frame_count = self._get_pending_frame_count()
+                    self._rwfm_pending_label = "normal"
+                    self.phase = HILPhase.RWFM_EVALUATION_PAUSED
+                    print(
+                        f"\n⏸️ [RWFM EVALUATION PAUSED] 직전 구간 [{self._rwfm_segment_start_frame}, {self._rwfm_paused_frame_count}) 평가 대기\n"
+                        f"   👉 S: SELF_CORRECTION (+0.4, learn=true)\n"
+                        f"   👉 F: FAILURE (-1.0, learn=false)\n"
+                        f"   👉 SPACE: 직전 구간 확정(기본 NORMAL) 후 자율추론 재개\n"
+                        f"   👉 ENTER / C: 직전 구간 확정 후 Rollout 종료 (REVIEW 대기)\n"
+                        f"   👉 N: 폐기 후 다음 trial / R: 폐기 후 동일 trial 재시작"
+                    )
+                elif self.phase is HILPhase.RWFM_EVALUATION_PAUSED:
+                    self._commit_rwfm_segment(self._rwfm_pending_label)
+                    self._rwfm_pending_label = "normal"
+                    _flush_terminal_input()
+                    _disable_leader_torque(self.teleop)
+                    self.client.resume_policy_control()
+                    self.is_trial_recording = True
+                    self.phase = HILPhase.AUTONOMOUS
+                    print("\n🚀 [AUTONOMOUS RESUMED] fresh observation부터 자율추론 및 녹화 재개!")
+                elif self.phase is HILPhase.REVIEW_PAUSED:
+                    print("[HINT] →로 저장하거나 ←로 폐기하세요.")
+                return None
+
             if self.phase is HILPhase.AUTONOMOUS:
                 self._pause_and_align()
             elif self.phase is HILPhase.INTERVENTION_PAUSED:
@@ -1686,6 +1863,42 @@ class HILSession:
                 print("[HINT] 교정을 완료하려면 Enter 또는 C를 누르세요.")
             elif self.phase is HILPhase.REVIEW_PAUSED:
                 print("[HINT] →로 저장하거나 ←로 폐기하세요.")
+            return None
+
+        if command in {HILCommand.START_DIRECT_CORRECTION, HILCommand.FREEZE_CORRECTION} and self.cfg.record_mode == "rwfm_rollout":
+            if self.phase is HILPhase.AUTONOMOUS:
+                _hold_follower_at_measured_position(self.robot)
+                self.client.pause_policy_control()
+                _hold_follower_at_measured_position(self.robot)
+                self.is_trial_recording = False
+                self._rwfm_paused_frame_count = self._get_pending_frame_count()
+                self._commit_rwfm_segment("normal")
+                self._rwfm_outcome = "grasp_success"
+                self.phase = HILPhase.REVIEW_PAUSED
+                print(
+                    f"\n📋 [RWFM ROLLOUT REVIEW] Rollout 종료! 총 {self._rwfm_paused_frame_count} 프레임, "
+                    f"{len(self._rwfm_segments)} segments, outcome={self._rwfm_outcome}\n"
+                    f"   👉 → (오른쪽 화살표): 에피소드 및 RWFM 어노테이션 저장\n"
+                    f"   👉 ← (왼쪽 화살표): 에피소드 및 어노테이션 폐기\n"
+                    f"   👉 N: 폐기 후 다음 trial / R: 폐기 후 동일 trial 재시작"
+                )
+            elif self.phase is HILPhase.RWFM_EVALUATION_PAUSED:
+                self._commit_rwfm_segment(self._rwfm_pending_label)
+                if self._rwfm_pending_label == "failure":
+                    self._rwfm_outcome = "grasp_failure"
+                else:
+                    self._rwfm_outcome = "grasp_success"
+                self.phase = HILPhase.REVIEW_PAUSED
+                self.is_trial_recording = False
+                print(
+                    f"\n📋 [RWFM ROLLOUT REVIEW] Rollout 종료! 총 {self._rwfm_paused_frame_count} 프레임, "
+                    f"{len(self._rwfm_segments)} segments, outcome={self._rwfm_outcome}\n"
+                    f"   👉 → (오른쪽 화살표): 에피소드 및 RWFM 어노테이션 저장\n"
+                    f"   👉 ← (왼쪽 화살표): 에피소드 및 어노테이션 폐기\n"
+                    f"   👉 N: 폐기 후 다음 trial / R: 폐기 후 동일 trial 재시작"
+                )
+            elif self.phase is HILPhase.REVIEW_PAUSED:
+                print("[HINT] 먼저 →(저장) 또는 ←(폐기)를 선택하세요.")
             return None
 
         if command is HILCommand.START_DIRECT_CORRECTION:
@@ -1739,6 +1952,19 @@ class HILSession:
             return None
 
         if command is HILCommand.DISCARD_FROZEN_CORRECTION:
+            if self.cfg.record_mode == "rwfm_rollout":
+                if self.phase in {HILPhase.REVIEW_PAUSED, HILPhase.RWFM_EVALUATION_PAUSED}:
+                    self._discard_pending_correction("User discarded rwfm_rollout with left arrow")
+                    self._rwfm_segments = []
+                    self._rwfm_segment_start_frame = 0
+                    self._rwfm_paused_frame_count = 0
+                    self._rwfm_pending_label = "normal"
+                    _enable_leader_hold_at_current_pose(self.teleop)
+                    _hold_follower_at_measured_position(self.robot)
+                    self.phase = HILPhase.INTERVENTION_PAUSED
+                    print("[DISCARDED] 현재 Rollout 에피소드 및 어노테이션이 폐기되었습니다. (N: 다음 trial, R: 동일 trial 재시작)")
+                return None
+
             if self.phase is HILPhase.REVIEW_PAUSED:
                 self._discard_frozen_correction()
             elif self.phase in HIL_RECORDING_PHASES:
@@ -1754,13 +1980,64 @@ class HILSession:
                 return self._save_frozen_correction()
             elif self.phase in HIL_RECORDING_PHASES:
                 print("[HINT] 먼저 Enter 또는 C를 눌러 교정을 완료한 뒤 →를 누르세요.")
+            elif self.phase is HILPhase.RWFM_EVALUATION_PAUSED:
+                print("[HINT] 먼저 Enter 또는 C를 눌러 Rollout을 종료한 뒤 →를 누르세요.")
             return None
 
         if command is HILCommand.RESUME_AUTONOMOUS_VIA_OBSERVE:
+            if self.cfg.record_mode == "rwfm_rollout":
+                self._discard_pending_correction("User requested R reset in rwfm_rollout")
+                self._rwfm_segments = []
+                self._rwfm_segment_start_frame = 0
+                self._rwfm_paused_frame_count = 0
+                self._rwfm_pending_label = "normal"
+                self.is_trial_recording = False
+                _hold_follower_at_measured_position(self.robot)
+                self.client.pause_policy_control()
+                print("\n🔄 [RESET TRIAL] Follower Arm OBSERVE 복귀 (미녹화) 및 동일 trial 처음부터 재시작 (R)...")
+                if self.observe_target:
+                    self._record_joint_trajectory(
+                        target=self.observe_target,
+                        duration_s=self.cfg.macro_return_duration_s,
+                        fps=self.cfg.dataset.fps,
+                        smooth=True,
+                        record=False,
+                    )
+                    self._update_cached_block_coords()
+                _flush_terminal_input()
+                _disable_leader_torque(self.teleop)
+                self._expected_episode_index = self.dataset.num_episodes
+                self.is_trial_recording = True
+                self._resume_autonomous()
+                print("🚀 [RWFM ROLLOUT RESTARTED] OBSERVE 자세에서 SmolVLA 자율추론 처음부터 재시작!")
+                return None
+
             self._resume_autonomous_via_observe()
             return None
 
         if command is HILCommand.NEXT_TRIAL:
+            if self.cfg.record_mode == "rwfm_rollout":
+                if self._expected_episode_index is not None:
+                    self._discard_pending_correction("trial ended by user via N in rwfm_rollout")
+                self._rwfm_segments = []
+                self._rwfm_segment_start_frame = 0
+                self._rwfm_paused_frame_count = 0
+                self._rwfm_pending_label = "normal"
+                self.is_trial_recording = False
+                _hold_follower_at_measured_position(self.robot)
+                self.client.pause_policy_control()
+                if self.observe_target:
+                    self._record_joint_trajectory(
+                        target=self.observe_target,
+                        duration_s=self.cfg.macro_return_duration_s,
+                        fps=self.cfg.dataset.fps,
+                        smooth=True,
+                        record=False,
+                    )
+                self.phase = HILPhase.INTERVENTION_PAUSED
+                print("[NEXT] 현재 trial 종료. 다음 블록을 준비합니다.")
+                return TrialOutcome.NEXT
+
             if self.phase in HIL_RECORDING_PHASES or self.phase is HILPhase.REVIEW_PAUSED:
                 print("[HINT] 먼저 현재 교정을 저장(→)하거나 폐기(←)하세요.")
                 return None
@@ -1777,10 +2054,26 @@ class HILSession:
         self.intervention_start_frame = None
         self.pre_intervention_buffer.clear()
         self._expected_episode_index = None
-        if self.cfg.record_mode == "full_on_intervention":
+        self._recorded_autonomous_frames = 0
+
+        if self.cfg.record_mode in {"full_on_intervention", "rwfm_rollout"}:
             self.is_trial_recording = True
+            self._expected_episode_index = self.dataset.num_episodes
         else:
             self.is_trial_recording = False
+
+        if self.cfg.record_mode == "rwfm_rollout":
+            self._rwfm_segments = []
+            self._rwfm_segment_start_frame = 0
+            self._rwfm_paused_frame_count = 0
+            self._rwfm_pending_label = "normal"
+            self._rwfm_outcome = "grasp_success"
+            if self.cfg.dataset.single_task:
+                task_lower = self.cfg.dataset.single_task.lower()
+                for color in ["red", "yellow", "wood", "green", "blue"]:
+                    if color in task_lower:
+                        self._current_target_block = color
+                        break
 
         # Cache block coordinates while arm is at observe pose before trial begins
         self._update_cached_block_coords()
@@ -1815,7 +2108,12 @@ class HILSession:
 
                 target_hz = (
                     self.cfg.paused_poll_hz
-                    if self.phase in {HILPhase.INTERVENTION_PAUSED, HILPhase.REVIEW_PAUSED}
+                    if self.phase
+                    in {
+                        HILPhase.INTERVENTION_PAUSED,
+                        HILPhase.REVIEW_PAUSED,
+                        HILPhase.RWFM_EVALUATION_PAUSED,
+                    }
                     else self.cfg.dataset.fps
                 )
                 precise_sleep(max(0.0, 1.0 / target_hz - (time.perf_counter() - loop_started_at)))
