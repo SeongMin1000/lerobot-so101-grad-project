@@ -76,24 +76,27 @@ from lerobot.transforms.transforms import ImageTransforms, ImageTransformsConfig
 from lerobot.utils.sample_weighting import RewardSampleWeighter, SampleWeightingConfig
 
 DEFAULT_BASE_POLICY = "eslab1234/smolvla_multitask_5blocks_v3_865ep_trimmed_from575_285k_fullft_lr1e5_150k"
-DEFAULT_GENERAL_DATASET = "eslab1234/smolvla_rwfm_general_725ep_v1"
+DEFAULT_GENERAL_DATASET = "eslab1234/smolvla_rwfm_general_masked575_topgrasp_755ep_v1"
 DEFAULT_TASK1_DATASET = "eslab1234/smolvla_task1_hil_575_285k_v4_120ep_trimmed_merged"
 DEFAULT_TASK2_DATASET = "eslab1234/smolvla_task2_hil_575_285k_v4_127ep_trimmed_merged"
 
-# Authoritative 725-episode boundary partition
-CLEAN_RANGE = (0, 574)      # 575 episodes (reward 0.0, learn=true)
-ROLLOUT_RANGE = (575, 674)  # 100 episodes (normal 0.0, self_corr 0.4, failure -1.0)
-HIL_RANGE = (675, 724)      # 50 episodes (reward 0.6, learn=true)
+# Authoritative 755-episode boundary partition
+CLEAN_T1_RANGE = (0, 352)      # 353 episodes (reward 0.0, placement learn=false mask)
+CLEAN_T2_RANGE = (353, 574)    # 222 episodes (reward 0.0, placement learn=false mask)
+ROLLOUT100_RANGE = (575, 674)  # 100 episodes (normal 0.0, self_corr 0.4, failure -1.0)
+TOPGRASP30_RANGE = (675, 704)  # 30 episodes (normal 0.0, self_corr 0.4, learn=true)
+HIL_RANGE = (705, 754)         # 50 episodes (reward 0.6, learn=true)
 
 
 class GeneralSourceBalancedSampler:
-    """Manages source-aware, episode-balanced sampling across the 725-episode General dataset.
+    """Manages source-aware, 50:50 clean balanced sampling across the 755-episode General dataset.
 
     Cadence:
-      - Normal step:  24 clean + 8 rollout + 0 HIL = 32
-      - HIL step:     22 clean + 8 rollout + 2 HIL = 32 (when step % hil_interval == 0)
+      - Normal step (B32): Task1 Clean 11 + Task2 Clean 11 + Rollout100 6 + TopGrasp30 4 = 32
+      - HIL step (B32):    Task1 Clean 10 + Task2 Clean 10 + Rollout100 6 + TopGrasp30 4 + HIL 2 = 32 (when step % hil_interval == 0)
 
     Guarantees:
+      - Clean T1 and Clean T2 are sampled strictly 50:50 (not proportional to 353:222).
       - Inside each source, episodes are drawn uniformly without replacement before cycle repeat.
       - Within each chosen episode, a valid frame index is selected uniformly.
     """
@@ -101,25 +104,21 @@ class GeneralSourceBalancedSampler:
     def __init__(
         self,
         episodes_parquet: Path,
-        clean_batch_size: int = 24,
-        rollout_batch_size: int = 8,
-        hil_batch_size: int = 2,
         hil_interval: int = 3,
         seed: int = 42,
     ):
-        self.clean_batch_size = clean_batch_size
-        self.rollout_batch_size = rollout_batch_size
-        self.hil_batch_size = hil_batch_size
         self.hil_interval = hil_interval
         self.rng = np.random.default_rng(seed)
 
         ep_df = pd.read_parquet(episodes_parquet)
         total_episodes = len(ep_df)
-        if total_episodes != 725:
-            raise ValueError(f"General dataset expected 725 episodes, found {total_episodes}")
+        if total_episodes != 755:
+            raise ValueError(f"General dataset expected 755 episodes, found {total_episodes}")
 
-        self.clean_pools: Dict[int, List[int]] = {}
-        self.rollout_pools: Dict[int, List[int]] = {}
+        self.clean_t1_pools: Dict[int, List[int]] = {}
+        self.clean_t2_pools: Dict[int, List[int]] = {}
+        self.rollout100_pools: Dict[int, List[int]] = {}
+        self.topgrasp30_pools: Dict[int, List[int]] = {}
         self.hil_pools: Dict[int, List[int]] = {}
 
         for ep_idx in range(total_episodes):
@@ -131,22 +130,30 @@ class GeneralSourceBalancedSampler:
             e = max(s + 1, f_end - 1)
             frames = list(range(s, e))
 
-            if CLEAN_RANGE[0] <= ep_idx <= CLEAN_RANGE[1]:
-                self.clean_pools[ep_idx] = frames
-            elif ROLLOUT_RANGE[0] <= ep_idx <= ROLLOUT_RANGE[1]:
-                self.rollout_pools[ep_idx] = frames
+            if CLEAN_T1_RANGE[0] <= ep_idx <= CLEAN_T1_RANGE[1]:
+                self.clean_t1_pools[ep_idx] = frames
+            elif CLEAN_T2_RANGE[0] <= ep_idx <= CLEAN_T2_RANGE[1]:
+                self.clean_t2_pools[ep_idx] = frames
+            elif ROLLOUT100_RANGE[0] <= ep_idx <= ROLLOUT100_RANGE[1]:
+                self.rollout100_pools[ep_idx] = frames
+            elif TOPGRASP30_RANGE[0] <= ep_idx <= TOPGRASP30_RANGE[1]:
+                self.topgrasp30_pools[ep_idx] = frames
             elif HIL_RANGE[0] <= ep_idx <= HIL_RANGE[1]:
                 self.hil_pools[ep_idx] = frames
             else:
                 raise ValueError(f"Unmapped episode index {ep_idx}")
 
-        assert len(self.clean_pools) == 575
-        assert len(self.rollout_pools) == 100
+        assert len(self.clean_t1_pools) == 353
+        assert len(self.clean_t2_pools) == 222
+        assert len(self.rollout100_pools) == 100
+        assert len(self.topgrasp30_pools) == 30
         assert len(self.hil_pools) == 50
 
         # Cycle queues for episode-balanced sampling
-        self.clean_queue: List[int] = []
-        self.rollout_queue: List[int] = []
+        self.clean_t1_queue: List[int] = []
+        self.clean_t2_queue: List[int] = []
+        self.rollout100_queue: List[int] = []
+        self.topgrasp30_queue: List[int] = []
         self.hil_queue: List[int] = []
 
     def _sample_from_pool(self, pools: Dict[int, List[int]], queue: List[int], count: int) -> List[int]:
@@ -168,25 +175,40 @@ class GeneralSourceBalancedSampler:
         hil_active = (step % self.hil_interval == 0)
 
         if hil_active:
-            n_clean = self.clean_batch_size - self.hil_batch_size
-            n_rollout = self.rollout_batch_size
-            n_hil = self.hil_batch_size
+            n_t1 = 10
+            n_t2 = 10
+            n_rollout = 6
+            n_topgrasp = 4
+            n_hil = 2
         else:
-            n_clean = self.clean_batch_size
-            n_rollout = self.rollout_batch_size
+            n_t1 = 11
+            n_t2 = 11
+            n_rollout = 6
+            n_topgrasp = 4
             n_hil = 0
 
-        clean_indices = self._sample_from_pool(self.clean_pools, self.clean_queue, n_clean)
-        rollout_indices = self._sample_from_pool(self.rollout_pools, self.rollout_queue, n_rollout)
-        hil_indices = self._sample_from_pool(self.hil_pools, self.hil_queue, n_hil)
+        clean_t1_idx = self._sample_from_pool(self.clean_t1_pools, self.clean_t1_queue, n_t1)
+        clean_t2_idx = self._sample_from_pool(self.clean_t2_pools, self.clean_t2_queue, n_t2)
+        rollout_idx = self._sample_from_pool(self.rollout100_pools, self.rollout100_queue, n_rollout)
+        topgrasp_idx = self._sample_from_pool(self.topgrasp30_pools, self.topgrasp30_queue, n_topgrasp)
+        hil_idx = self._sample_from_pool(self.hil_pools, self.hil_queue, n_hil)
 
-        all_indices = clean_indices + rollout_indices + hil_indices
-        counts = {"clean": n_clean, "rollout": n_rollout, "hil": n_hil, "total": len(all_indices)}
+        all_indices = clean_t1_idx + clean_t2_idx + rollout_idx + topgrasp_idx + hil_idx
+        assert len(all_indices) == 32
+
+        counts = {
+            "clean_t1": n_t1,
+            "clean_t2": n_t2,
+            "rollout": n_rollout,
+            "topgrasp": n_topgrasp,
+            "hil": n_hil,
+            "total": len(all_indices),
+        }
         return all_indices, counts, hil_active
 
 
 class GeneralRWFMManager:
-    """Manages failure masking and reward-weighted loss computation for General 725ep dataset."""
+    """Manages failure masking, clean placement masking, and reward-weighted loss computation for General 755ep dataset."""
 
     def __init__(
         self,
@@ -202,6 +224,7 @@ class GeneralRWFMManager:
 
         rew_path = dataset_root / "meta/episode_frame_rewards.json"
         ann_path = dataset_root / "meta/rwfm_rollout_annotations.json"
+        learn_seg_path = dataset_root / "meta/rwfm_learn_segments.json"
 
         if not rew_path.exists():
             raise FileNotFoundError(f"Authoritative episode_frame_rewards.json missing: {rew_path}")
@@ -211,13 +234,22 @@ class GeneralRWFMManager:
         self.frame_rewards = json.loads(rew_path.read_text())
         self.annotations = json.loads(ann_path.read_text()).get("episodes", {})
 
-        # Build fast lookup for failure intervals: ep_idx -> list of (start, end)
+        # 1. Actual rollout failure intervals (episodes 575..674, etc.)
         self.failure_intervals: Dict[int, List[Tuple[int, int]]] = collections.defaultdict(list)
         for ep_str, info in self.annotations.items():
             ep_idx = int(ep_str)
             for seg in info.get("segments", []):
                 if seg.get("type") == "failure":
                     self.failure_intervals[ep_idx].append((int(seg["start"]), int(seg["end"])))
+
+        # 2. Clean placement intervals from meta/rwfm_learn_segments.json (episodes 0..574)
+        self.clean_placement_intervals: Dict[int, List[Tuple[int, int]]] = collections.defaultdict(list)
+        if learn_seg_path.exists():
+            learn_seg_data = json.loads(learn_seg_path.read_text()).get("episodes", {})
+            for ep_str, info in learn_seg_data.items():
+                ep_idx = int(ep_str)
+                for interval in info.get("masked_intervals", []):
+                    self.clean_placement_intervals[ep_idx].append((int(interval[0]), int(interval[1])))
 
         # RewardSampleWeighter
         cfg = SampleWeightingConfig(
@@ -236,27 +268,43 @@ class GeneralRWFMManager:
                 return True
         return False
 
+    def is_frame_clean_placement_masked(self, ep_idx: int, frame_idx: int) -> bool:
+        if ep_idx not in self.clean_placement_intervals:
+            return False
+        for s, e in self.clean_placement_intervals[ep_idx]:
+            if s <= frame_idx < e:
+                return True
+        return False
+
     def build_rwfm_learn_mask(
         self,
         episode_indices: List[int],
         frame_indices: List[int],
-    ) -> torch.Tensor:
-        """Constructs [B, K] boolean tensor: True = learnable, False = failure."""
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Constructs [B, K] boolean masks:
+        - learn_mask: True = learnable, False = do not learn (either actual failure OR clean placement masked)
+        - is_failure: True = actual rollout failure
+        - is_clean_placement: True = clean placement mask
+        """
         B = len(episode_indices)
         K = self.chunk_size
         learn_mask = torch.ones((B, K), dtype=torch.bool, device=self.device)
+        is_failure = torch.zeros((B, K), dtype=torch.bool, device=self.device)
+        is_clean_placement = torch.zeros((B, K), dtype=torch.bool, device=self.device)
 
         for b in range(B):
             ep_i = episode_indices[b]
             f_i = frame_indices[b]
-            # Only rollout episodes (575..674) can have failure segments
-            if ep_i in self.failure_intervals:
-                for k in range(K):
-                    target_f = f_i + k
-                    if self.is_frame_failure(ep_i, target_f):
-                        learn_mask[b, k] = False
+            for k in range(K):
+                target_f = f_i + k
+                if self.is_frame_failure(ep_i, target_f):
+                    learn_mask[b, k] = False
+                    is_failure[b, k] = True
+                elif self.is_frame_clean_placement_masked(ep_i, target_f):
+                    learn_mask[b, k] = False
+                    is_clean_placement[b, k] = True
 
-        return learn_mask
+        return learn_mask, is_failure, is_clean_placement
 
     def compute_weighted_general_loss(
         self,
@@ -264,7 +312,7 @@ class GeneralRWFMManager:
         batch: Dict[str, torch.Tensor],
         raw_samples: List[Dict[str, Any]],
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """Executes failure action loss masking and reward-weighted flow matching loss computation."""
+        """Executes failure & clean placement action loss masking and reward-weighted flow matching loss computation."""
         B = len(raw_samples)
         K = self.chunk_size
 
@@ -277,28 +325,28 @@ class GeneralRWFMManager:
             for s in raw_samples
         ]
 
-        # 1. Build failure learn mask [B, K]
-        rwfm_learn_mask = self.build_rwfm_learn_mask(ep_indices, f_indices)
+        # 1. Build learn mask and component masks [B, K]
+        learn_mask, is_failure, is_clean_placement = self.build_rwfm_learn_mask(ep_indices, f_indices)
 
-        # 2. Formulate effective_action_is_pad = original_action_is_pad | (~rwfm_learn_mask)
+        # 2. Formulate effective_action_is_pad = original_action_is_pad | (~learn_mask)
         orig_pad = batch.get("action_is_pad")
         if orig_pad is not None:
-            effective_action_is_pad = orig_pad.to(self.device) | (~rwfm_learn_mask)
+            effective_action_is_pad = orig_pad.to(self.device) | (~learn_mask)
         else:
-            effective_action_is_pad = ~rwfm_learn_mask
+            effective_action_is_pad = ~learn_mask
 
         batch["action_is_pad"] = effective_action_is_pad
-        batch["rwfm_learn_mask"] = rwfm_learn_mask
+        batch["rwfm_learn_mask"] = learn_mask
         batch["episode_index"] = torch.tensor(ep_indices, dtype=torch.long, device=self.device)
         batch["frame_index"] = torch.tensor(f_indices, dtype=torch.long, device=self.device)
 
         # 3. Compute per-sample losses via policy forward with reduction="none"
         per_sample_loss, loss_dict = policy.forward(batch, reduction="none")
 
-        # 4. Compute reward weights (excluding failure & padding actions)
-        weights, weight_stats = self.weighter.compute_batch_weights(batch, learn_mask=rwfm_learn_mask)
+        # 4. Compute reward weights (excluding failure, clean placement & padding actions)
+        weights, weight_stats = self.weighter.compute_batch_weights(batch, learn_mask=learn_mask)
 
-        # 5. Mask out entirely invalid samples (where all 50 actions are failure or pad)
+        # 5. Mask out entirely invalid samples (where all 50 actions are failure, placement, or pad)
         valid_sample_mask = (~effective_action_is_pad).any(dim=1)  # shape (B,)
         valid_weights = weights * valid_sample_mask.float()
         total_valid_weight = valid_weights.sum().clamp_min(1e-12)
@@ -307,7 +355,8 @@ class GeneralRWFMManager:
 
         # Metrics bookkeeping
         total_actions = B * K
-        failure_actions = (~rwfm_learn_mask).sum().item()
+        failure_actions = is_failure.sum().item()
+        clean_placement_actions = is_clean_placement.sum().item()
         valid_actions = (~effective_action_is_pad).sum().item()
 
         stats = {
@@ -321,6 +370,7 @@ class GeneralRWFMManager:
             "weight_max": weights.max().item(),
             "valid_action_ratio": valid_actions / float(total_actions),
             "masked_failure_action_ratio": failure_actions / float(total_actions),
+            "masked_clean_placement_action_ratio": clean_placement_actions / float(total_actions),
             "masked_sample_count": (B - valid_sample_mask.sum().item()),
         }
 
@@ -332,10 +382,10 @@ def parse_combined_args() -> argparse.Namespace:
 
     # Model & Datasets
     parser.add_argument("--base-policy", type=str, default=DEFAULT_BASE_POLICY, help="Base 865 pretrained model.")
-    parser.add_argument("--general-dataset", type=str, default=DEFAULT_GENERAL_DATASET, help="General 725ep dataset.")
+    parser.add_argument("--general-dataset", type=str, default=DEFAULT_GENERAL_DATASET, help="General 755ep dataset.")
     parser.add_argument("--task1-dataset", type=str, default=DEFAULT_TASK1_DATASET, help="Task 1 clean branch dataset (120ep).")
     parser.add_argument("--task2-dataset", type=str, default=DEFAULT_TASK2_DATASET, help="Task 2 clean branch dataset (127ep).")
-    parser.add_argument("--job-name", type=str, default="smolvla_865base_rwfm725_samecolor_pcgrad_expertonly_30k", help="Job run name.")
+    parser.add_argument("--job-name", type=str, default="smolvla_865base_rwfm755_masked575_samecolor_pcgrad_expertonly_30k", help="Job run name.")
     parser.add_argument("--output-dir", type=str, default=None, help="Output directory for checkpoints and logs.")
 
     # Training Steps & Schedule
@@ -349,15 +399,12 @@ def parse_combined_args() -> argparse.Namespace:
 
     # General RWFM Objective
     parser.add_argument("--general-batch-size", type=int, default=32, help="General objective batch size (default 32).")
-    parser.add_argument("--clean-batch-size", type=int, default=24, help="Clean 575ep batch size on normal step (default 24).")
-    parser.add_argument("--rollout-batch-size", type=int, default=8, help="Rollout 100ep batch size (default 8).")
-    parser.add_argument("--hil-batch-size", type=int, default=2, help="HIL batch size injected on HIL step (default 2).")
     parser.add_argument("--hil-interval", type=int, default=3, help="HIL injection interval in global steps (default 3).")
     parser.add_argument("--temperature", type=float, default=1.0, help="RWFM softmax temperature (default 1.0).")
     parser.add_argument("--chunk-size", type=int, default=50, help="Action chunk size (default 50).")
 
     # Placement PCGrad Objective
-    parser.add_argument("--pcgrad-interval", type=int, default=6, help="PCGrad invocation interval in global steps (default 6).")
+    parser.add_argument("--pcgrad-interval", type=int, default=2, help="PCGrad invocation interval in global steps (default 2).")
     parser.add_argument("--microbatch-per-task", type=int, default=16, help="PCGrad batch size per task (default 16; total 32).")
     parser.add_argument("--micro-batch-size", type=int, default=8, help="Micro-batch chunk size for PCGrad gradient accumulation.")
     parser.add_argument("--use-pcgrad", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=True, help="Apply PCGrad projection.")
@@ -436,13 +483,13 @@ def main():
     logger.info("🚀 SmolVLA Unified Trainer: General Expert-Only RWFM + Same-Color PCGrad")
     logger.info("=" * 85)
     logger.info(f"Base Policy          : {args.base_policy}")
-    logger.info(f"General 725ep Dataset: {args.general_dataset}")
+    logger.info(f"General 755ep Dataset: {args.general_dataset}")
     logger.info(f"Task 1 Branch Dataset: {args.task1_dataset}")
     logger.info(f"Task 2 Branch Dataset: {args.task2_dataset}")
     logger.info(f"Output Directory     : {out_dir}")
     logger.info(f"Training Steps       : {args.steps}")
     logger.info(f"Learning Rate        : {args.lr} -> {args.final_lr} (warmup: {args.warmup_steps} steps)")
-    logger.info(f"General Batch Size   : {args.general_batch_size} (clean={args.clean_batch_size}, rollout={args.rollout_batch_size}, HIL={args.hil_batch_size}, interval={args.hil_interval})")
+    logger.info(f"General Batch Size   : {args.general_batch_size} (normal: T1=11, T2=11, Rollout=6, TopGrasp=4 | HIL: T1=10, T2=10, Rollout=6, TopGrasp=4, HIL=2, interval={args.hil_interval})")
     logger.info(f"PCGrad Batch Size    : {args.microbatch_per_task} T1 + {args.microbatch_per_task} T2 (interval={args.pcgrad_interval})")
     logger.info(f"Gradient Weights     : General={args.general_gradient_weight}, PCGrad={args.pcgrad_gradient_weight}")
     logger.info(f"Anchor Projection    : {args.general_anchor_projection}")
@@ -475,8 +522,8 @@ def main():
     ds_t1 = LeRobotDataset(args.task1_dataset, root=p_t1, image_transforms=image_transforms, delta_timestamps=delta_ts, return_uint8=True)
     ds_t2 = LeRobotDataset(args.task2_dataset, root=p_t2, image_transforms=image_transforms, delta_timestamps=delta_ts, return_uint8=True)
 
-    if ds_gen.num_episodes != 725 and not args.allow_source_count_mismatch:
-        raise ValueError(f"General dataset expected 725 episodes, found {ds_gen.num_episodes}")
+    if ds_gen.num_episodes != 755 and not args.allow_source_count_mismatch:
+        raise ValueError(f"General dataset expected 755 episodes, found {ds_gen.num_episodes}")
     if ds_t1.num_episodes != 120 and not args.allow_source_count_mismatch:
         raise ValueError(f"Task 1 branch expected 120 episodes, found {ds_t1.num_episodes}")
     if ds_t2.num_episodes != 127 and not args.allow_source_count_mismatch:
@@ -490,9 +537,6 @@ def main():
     gen_ep_parquet = p_gen / "meta/episodes/chunk-000/file-000.parquet"
     gen_sampler = GeneralSourceBalancedSampler(
         episodes_parquet=gen_ep_parquet,
-        clean_batch_size=args.clean_batch_size,
-        rollout_batch_size=args.rollout_batch_size,
-        hil_batch_size=args.hil_batch_size,
         hil_interval=args.hil_interval,
         seed=args.seed,
     )
@@ -790,8 +834,11 @@ def main():
                 "rwfm/weight_max": rwfm_stats["weight_max"],
                 "rwfm/valid_action_ratio": rwfm_stats["valid_action_ratio"],
                 "rwfm/masked_failure_action_ratio": rwfm_stats["masked_failure_action_ratio"],
-                "rwfm/source_clean_count": gen_counts["clean"],
-                "rwfm/source_rollout_count": gen_counts["rollout"],
+                "rwfm/masked_clean_placement_action_ratio": rwfm_stats["masked_clean_placement_action_ratio"],
+                "rwfm/source_clean_t1_count": gen_counts["clean_t1"],
+                "rwfm/source_clean_t2_count": gen_counts["clean_t2"],
+                "rwfm/source_rollout100_count": gen_counts["rollout"],
+                "rwfm/source_topgrasp30_count": gen_counts["topgrasp"],
                 "rwfm/source_hil_count": gen_counts["hil"],
                 # Gradient metrics
                 "grad/general_norm": g_gen_norm,
