@@ -206,8 +206,8 @@ printf '  safety:      step=%s, tracking=%s x %s\n' \
 printf '  pan bias:    %s (near=%.1f deg, far=%.1f deg)\n\n' \
   "$PAN_BIAS_DIRECTION" "$PAN_BIAS_NEAR_DEG" "$PAN_BIAS_FAR_DEG"
 
-read -r -p "Robot area clear, leader arm free, emergency stop ready? Type HIL: " answer
-[[ "$answer" == "HIL" ]] || fail "Cancelled by user"
+printf '%s\n' '[START GATE] Initialization will now connect the robot and move both arms to the observe pose.'
+printf '%s\n' '[START GATE] Autonomous policy control remains paused until you type start in the ready prompt.'
 export PYTHONUNBUFFERED=1
 
 exec python -u -m lerobot.grad_project.recording.smolvla_hil_record \

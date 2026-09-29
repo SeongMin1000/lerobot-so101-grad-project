@@ -95,7 +95,7 @@ from .smolvla_record_observe_return import (
 )
 
 
-HIL_RECORDER_BUILD = "2026-09-12-remote-smolvla-correction-only-v4"
+HIL_RECORDER_BUILD = "2026-09-29-ready-start-gate-v5"
 
 
 @dataclass
@@ -573,6 +573,7 @@ def _wait_for_trial_ready(
 ) -> bool:
     print()
     print("#" * 78)
+    print("[READY] model loaded | cameras/dataset ready | observe pose reached | policy paused")
     print(
         f"[HIL READY] physical trial {trial_index + 1} | "
         f"saved corrections {saved_corrections}/{cfg.dataset.num_episodes}"
@@ -581,16 +582,16 @@ def _wait_for_trial_ready(
     print(f"[TASK] {cfg.dataset.single_task}")
     print("1) 평가와 같은 조건으로 5개 블록을 무작위 배치")
     print("2) 특히 현재 모델의 실패 위치/각도(B·G 정면 등)를 이번 trial에 포함")
-    print("3) 작업공간과 비상정지 준비 후 ENTER -> autonomous 시작")
+    print("3) 작업공간과 비상정지 준비 후 start + ENTER -> autonomous 시작")
     print("   q + ENTER -> 새 trial을 시작하지 않고 종료")
     print("#" * 78)
     while True:
-        answer = input("준비 완료: ENTER / 종료: q + ENTER > ").strip().lower()
-        if answer == "":
+        answer = input("준비 완료: start + ENTER / 종료: q + ENTER > ").strip()
+        if answer == "start":
             return True
         if answer in {"q", "quit", "exit"}:
             return False
-        print("ENTER만 누르거나 q를 입력하세요.")
+        print("정확히 start를 입력하거나 q를 입력하세요.")
 
 
 def _print_active_controls(record_mode: str = "corrections_only") -> None:
@@ -2045,6 +2046,11 @@ class HILSession:
 
         raise RuntimeError(f"Unhandled HIL command: {command}")
 
+    def prepare_autonomous_start(self) -> None:
+        """Finish observe-pose perception work before the operator start gate."""
+
+        self._update_cached_block_coords()
+
     def run_trial(self, physical_trial: int = 0) -> TrialOutcome:
         self.physical_trial = physical_trial
         self._trial_intervention_count = 0
@@ -2074,9 +2080,6 @@ class HILSession:
                     if color in task_lower:
                         self._current_target_block = color
                         break
-
-        # Cache block coordinates while arm is at observe pose before trial begins
-        self._update_cached_block_coords()
 
         self._resume_autonomous()
         _print_active_controls(self.cfg.record_mode)
@@ -2257,6 +2260,10 @@ def record_hil(
                         cfg=cfg,
                         reason=f"prepare HIL physical trial {physical_trial + 1}",
                     )
+                    # Finish camera/perception preparation before opening the
+                    # explicit start gate so policy motion begins immediately
+                    # after the operator types "start".
+                    session.prepare_autonomous_start()
                     ready = _wait_for_trial_ready(
                         trial_index=physical_trial,
                         saved_corrections=session.saved_corrections,
